@@ -6,6 +6,7 @@
 import { MatroskaDemuxer, FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE } from './demux/matroska.js';
 import { buildRemuxer, SUBTITLE_CODECS, audioNote } from './remux/tracks.js';
 import { colourFromTrack, isHdr, parseHvcC, scanAccessUnit, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
+import { parseVp9Keyframe } from './demux/vp9.js';
 
 const BUFFER_AHEAD = 20;          // seconds of media to keep ahead of the playhead
 const KEEP_BEHIND = 12;           // seconds retained behind it before eviction
@@ -101,6 +102,12 @@ export class Player {
                   fonts: 0, hdr: null, dolbyVision: null, dynamicHdr: null,
                   hdr10plus: false, hdrVivid: false, mastering: null, cll: null };
 
+    // VP9 has to be probed before any remuxer is built: Matroska stores no
+    // CodecPrivate for it, so profile and bit depth exist only in a keyframe.
+    for (const t of dx.tracks) {
+      if (t.codecId === 'V_VP9' && !t.vp9) t.vp9 = await this._probeVp9(t);
+    }
+
     for (const t of dx.tracks) {
       if (t.type === TRACK_VIDEO) {
         const colour = colourFromTrack(t);
@@ -178,6 +185,19 @@ export class Player {
       }
     }
     return out;
+  }
+
+  /** Read profile and bit depth out of the first VP9 keyframe. */
+  async _probeVp9(track) {
+    let n = 0;
+    for await (const b of this.demuxer.readBlocks(this.demuxer.seekPosition(0, track.number), 2 << 20)) {
+      if (b.track !== track.number) continue;
+      const cfg = parseVp9Keyframe(b.data);
+      if (cfg) return cfg;
+      if (++n > 60) break;   // a keyframe this far in means something is wrong
+    }
+    this.log(`VP9 track ${track.number}: no keyframe header found — cannot determine profile`, 'warn');
+    return null;
   }
 
   /** Start playback with the chosen video/audio track indices. */

@@ -109,5 +109,43 @@ for (const file of ['houshi.mkv', 'mozahngtantexiaoass.mkv', 'qinyinshaonvpgs.mk
   src.close();
 }
 
+
+/** Byte offset of a box by fourcc, or -1. Naive scan is fine for an init segment. */
+function findBox(buf, fourcc) {
+  const t = [...fourcc].map(c => c.charCodeAt(0));
+  for (let i = 0; i + 8 <= buf.length; i++) {
+    if (buf[i+4]===t[0] && buf[i+5]===t[1] && buf[i+6]===t[2] && buf[i+7]===t[3]) return i;
+  }
+  return -1;
+}
+
+// --- dOps: Matroska OpusHead is little-endian, MP4 dOps is big-endian ------
+// Copying the bytes across produces a box ffmpeg reads happily and Chrome
+// rejects by silently detaching the MediaSource. Assert the values, not the
+// presence of the box.
+{
+  const { buildRemuxer } = await import('../src/remux/tracks.js');
+  const src = new NodeSource('D:/xiaochengxu/webplayer/samples/video-avc.mkv');
+  const dx = await new MatroskaDemuxer(src).parseHeader();
+  const t = dx.tracks.find(x => x.codecId === 'A_OPUS');
+  if (t) {
+    const init = buildRemuxer(t, dx.duration).initSegment();
+    const at = findBox(init, 'dOps');
+    const ok = at >= 0;
+    if (!ok) { failures++; console.log('  FAIL  dOps box present: false'); }
+    else {
+      const b = init.subarray(at + 8);
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const cp = new DataView(t.codecPrivate.buffer, t.codecPrivate.byteOffset, t.codecPrivate.byteLength);
+      check('dOps Version is 0 (OpusHead is 1)', b[0], 0);
+      check('dOps OutputChannelCount', b[1], t.codecPrivate[9]);
+      check('dOps PreSkip is byte-swapped', dv.getUint16(2, false), cp.getUint16(10, true));
+      check('dOps InputSampleRate is byte-swapped', dv.getUint32(4, false), cp.getUint32(12, true));
+      check('dOps InputSampleRate is sane', dv.getUint32(4, false) === 48000, true);
+    }
+  }
+  src.close();
+}
+
 console.log(`\n${failures === 0 ? 'ALL BOX CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

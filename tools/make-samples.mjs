@@ -63,6 +63,60 @@ run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=20',
      '-strict', '-2', multi]);
 console.log(`  all four in one file -> ${multi.split('/').pop()}  ${size(multi)}`);
 
+// Video codecs the remuxer claims to handle. Until now every test file was
+// HEVC, so the AVC, AV1 and VP9 sample entries had never been built from real
+// CodecPrivate, let alone accepted by a browser -- a claim in the README with
+// nothing behind it. Each is generated at two bit depths where the format
+// allows, because the bit depth is what the codec string has to report.
+const VIDEO = [
+  { name: 'avc',      args: ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+                             '-pix_fmt', 'yuv420p', '-profile:v', 'high'] },
+  { name: 'av1',      args: ['-c:v', 'libsvtav1', '-preset', '10', '-crf', '50',
+                             '-pix_fmt', 'yuv420p'] },
+  { name: 'vp9',      args: ['-c:v', 'libvpx-vp9', '-speed', '8', '-crf', '45', '-b:v', '0',
+                             '-pix_fmt', 'yuv420p'] },
+  { name: 'vp9-10bit', args: ['-c:v', 'libvpx-vp9', '-speed', '8', '-crf', '45', '-b:v', '0',
+                              '-pix_fmt', 'yuv420p10le'] },
+];
+
+console.log('\n=== video codecs the remuxer claims to support ===');
+for (const v of VIDEO) {
+  const path = `${OUT}/video-${v.name}.mkv`;
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+       '-map', '0:v', '-map', '1:a', ...v.args, '-c:a', 'libopus', '-b:a', '96k', path]);
+  const codec = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,profile,pix_fmt', '-of', 'csv=p=0', path],
+    { encoding: 'utf8' }).trim();
+  console.log(`  ${v.name.padEnd(10)} -> ${path.split('/').pop().padEnd(22)} ${size(path)}  [${codec}]`);
+}
+
+// Two shapes that break assumptions rather than codecs.
+console.log('\n=== awkward container shapes ===');
+
+// No Cues. Seeking currently depends entirely on the index; a file without one
+// is common (anything still being written, and plenty of remuxes).
+// `-live 1` is what actually produces one: the muxer omits Cues entirely and
+// writes unknown-size clusters, exactly like a file still being written.
+// Suppressing the index with -reserve_index_space does not work -- ffmpeg
+// writes Cues anyway, which is how the first attempt at this sample passed
+// while testing nothing.
+const noCues = `${OUT}/no-cues.mkv`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=30',
+     '-c:v', 'libx265', '-preset', 'ultrafast', '-crf', '35', '-tag:v', 'hvc1', '-an',
+     '-f', 'matroska', '-live', '1', noCues]);
+console.log(`  no Cues index      -> ${noCues.split('/').pop()}  ${size(noCues)}`);
+
+// More than one video track. The player picks video[0] and has never seen a
+// file where that choice was not the only one.
+const multiVideo = `${OUT}/video-multi.mkv`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+     '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=10',
+     '-map', '0:v', '-map', '1:v',
+     '-c:v', 'libx265', '-preset', 'ultrafast', '-crf', '35', '-tag:v', 'hvc1',
+     '-metadata:s:v:0', 'title=main', '-metadata:s:v:1', 'title=thumbnail', multiVideo]);
+console.log(`  two video tracks   -> ${multiVideo.split('/').pop()}  ${size(multiVideo)}`);
+
 console.log(`
 Not synthesised, because nothing here can produce them honestly:
 

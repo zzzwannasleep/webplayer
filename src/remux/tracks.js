@@ -3,6 +3,7 @@
 // software decoder (or be dropped).
 import { TrackRemuxer, box, fullBox, u32, u16, bytes, concat, visualSampleEntry, audioSampleEntry, esdsBox, FOURCC } from './mp4.js';
 import { hevcCodecString, colourFromTrack, parseHvcC } from '../demux/hevc.js';
+import { vp9Level, vp9CodecString, vpcCPayload } from '../demux/vp9.js';
 
 /** Decode an AVC configuration record enough to build "avc1.PPCCLL". */
 function avcCodecString(cp) {
@@ -44,10 +45,20 @@ export function buildRemuxer(track, duration) {
     return new TrackRemuxer(track, { kind: 'video', codecString: av1CodecString(track.codecPrivate), sampleEntry: entry, duration, colour });
   }
   if (id === 'V_VP9') {
+    // Matroska carries no CodecPrivate for VP9, so the profile and bit depth
+    // come from a keyframe header that the caller parsed and hung on the track
+    // (see Player._describe). Without it there is nothing to derive them from
+    // and a guess would mislabel the stream, so refuse instead.
+    const cfg = track.vp9;
+    if (!cfg) return null;
+    const fps = track.defaultDuration ? 1e9 / track.defaultDuration : 30;
+    const level = vp9Level(cfg.width, cfg.height, fps);
+    // vpcC is a FullBox: the four version/flags bytes are part of it, and
+    // writing the record as a plain box shifts every field by four.
     const entry = visualSampleEntry('vp09', track, colour,
-      [track.codecPrivate?.length ? box('vpcC', track.codecPrivate)
-                                  : fullBox('vpcC', 1, 0, bytes(2, 10, (colour?.bitDepth ?? 10) << 4 | 0x01), u16(0))]);
-    return new TrackRemuxer(track, { kind: 'video', codecString: 'vp09.02.10.10', sampleEntry: entry, duration, colour });
+      [fullBox('vpcC', 1, 0, vpcCPayload(cfg, level, colour))]);
+    return new TrackRemuxer(track, { kind: 'video', codecString: vp9CodecString(cfg, level),
+                                     sampleEntry: entry, duration, colour });
   }
 
   // ---- audio ----
@@ -67,7 +78,9 @@ export function buildRemuxer(track, duration) {
     return new TrackRemuxer(track, { kind: 'audio', codecString: 'flac', sampleEntry: entry, duration, sampleRate: rate });
   }
   if (id === 'A_OPUS') {
-    const entry = audioSampleEntry('Opus', a.channels, rate, box('dOps', track.codecPrivate.subarray(8)));
+    const dOps = dOpsFromOpusHead(track.codecPrivate);
+    if (!dOps) return null;
+    const entry = audioSampleEntry('Opus', a.channels, rate, box('dOps', dOps));
     return new TrackRemuxer(track, { kind: 'audio', codecString: 'opus', sampleEntry: entry, duration, sampleRate: rate });
   }
   if (id === 'A_AC3' || id === 'A_EAC3') {
@@ -79,6 +92,46 @@ export function buildRemuxer(track, duration) {
   }
 
   return null;
+}
+
+/**
+ * Convert Matroska's OpusHead into an MP4 OpusSpecificBox payload.
+ *
+ * These carry the same fields and are NOT interchangeable: OpusHead is
+ * little-endian and starts at version 1, while dOps is big-endian and must be
+ * version 0. Copying the bytes across -- which is what stripping the 8-byte
+ * "OpusHead" magic amounts to -- turns a pre-skip of 312 into 14337 and a
+ * sample rate of 48000 into 2159738880.
+ *
+ * ffmpeg reads the result without complaining. Chrome rejects it by silently
+ * detaching the MediaSource, with no error on the element and no exception
+ * anywhere, which is why this survived a README claiming Opus support.
+ */
+function dOpsFromOpusHead(cp) {
+  if (!cp || cp.length < 19) return null;
+  const head = cp[0] === 0x4f && cp[1] === 0x70 && cp[2] === 0x75 && cp[3] === 0x73;   // "Opus"
+  const body = head ? cp.subarray(8) : cp;
+  if (body.length < 11) return null;
+  const le = new DataView(body.buffer, body.byteOffset, body.byteLength);
+
+  const channels = body[1];
+  const preSkip = le.getUint16(2, true);
+  const inputRate = le.getUint32(4, true);
+  const gain = le.getInt16(8, true);
+  const family = body[10];
+
+  const mappingLen = family === 0 ? 0 : 2 + channels;
+  const out = new Uint8Array(11 + mappingLen);
+  const be = new DataView(out.buffer);
+  out[0] = 0;                       // dOps Version is 0, not OpusHead's 1
+  out[1] = channels;
+  be.setUint16(2, preSkip, false);
+  be.setUint32(4, inputRate, false);
+  be.setInt16(8, gain, false);
+  out[10] = family;
+  // Channel mapping is a byte table, so it carries across unchanged.
+  if (mappingLen) out.set(body.subarray(11, 11 + mappingLen), 11);
+  return out;
 }
 
 /** Matroska sometimes stores the full "fLaC" stream header; MP4 wants just the blocks. */

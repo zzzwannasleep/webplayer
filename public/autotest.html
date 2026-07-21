@@ -210,7 +210,13 @@ try {
   el.src = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
   video.appendChild(el);
   el.track.mode = 'showing';
-  await waitFor(() => el.track.cues && el.track.cues.length > 0, 10000, 'the browser to parse the VTT');
+  // Wait for the element's load event, not for the first cue to appear:
+  // cues populate progressively, so checking the count as soon as one exists
+  // races the parser and yields a number one or two short at random.
+  await Promise.race([
+    new Promise(res => el.addEventListener('load', res, { once: true })),
+    waitFor(() => el.track.cues?.length >= cues, 15000, 'the browser to parse the VTT'),
+  ]);
   check('browser parsed the cues', el.track.cues.length, cues);
   // The browser rejects a malformed cue silently by dropping it, so an exact
   // match is the check -- not merely "some cues loaded".
@@ -220,6 +226,56 @@ try {
 } catch (e) {
   failures++;
   say(`  FAIL  ${e.message}`);
+}
+post();
+
+// --- codec paths that were only ever claimed, never played -----------------
+// The three files above are all HEVC. AVC, AV1 and VP9 have sample-entry code
+// and a README claim, but until these samples existed no browser had been
+// asked to accept one. A codec string is not right because it parses -- it is
+// right when MSE takes it and the decoder produces a picture.
+say('\n=== generated codec samples ===');
+const CODEC_SAMPLES = [
+  { url: '/samples/video-avc.mkv',       codec: 'avc1.42c01e' },
+  { url: '/samples/video-av1.mkv',       codec: 'av01.0.01M.08' },
+  { url: '/samples/video-vp9.mkv',       codec: 'vp09.00.21.08' },
+  { url: '/samples/video-vp9-10bit.mkv', codec: 'vp09.02.21.10' },
+  { url: '/samples/audio-multi.mkv',     codec: 'hvc1.1.6.L63.90', audioUnplayable: 4 },
+];
+for (const s of CODEC_SAMPLES) {
+  const p = new Player(video);
+  p.log = (m, lvl) => say(`       [${lvl ?? 'info'}] ${m}`);
+  // play() can wait indefinitely by design when the document is hidden, so a
+  // hang here says nothing about the codec. Race it and dump the state, rather
+  // than letting the whole suite time out with no evidence.
+  const guard = (promise, ms, what) => Promise.race([promise, new Promise((_, rej) =>
+    setTimeout(() => rej(new Error(`${what} stalled after ${ms}ms — hidden=${document.hidden} `
+      + `ms=${p.mediaSource?.readyState} net=${video.networkState} ready=${video.readyState} `
+      + `err=${video.error?.code ?? 'none'} buffered=${video.buffered.length}`)), ms))]);
+  try {
+    const i = await guard(p.load(s.url), 30000, 'load');
+    const mime = i.video[0]?.mime ?? '';
+    say(`  ${s.url.split('/').pop()}  ${mime}`);
+    check('  codec string as expected', mime.match(/codecs="([^"]+)"/)?.[1], s.codec);
+    check('  MSE accepts it', i.video[0]?.supported, true);
+    if (s.audioUnplayable) {
+      // Every one of these needs a software decoder; none may claim otherwise.
+      check('  audio tracks all reported unplayable', i.audio.filter(a => !a.supported).length, s.audioUnplayable);
+      check('  each names its codec', i.audio.every(a => a.note?.name), true);
+    }
+    await guard(p.play({ videoIndex: 0, audioIndex: 0 }), 30000, 'play');
+    await waitFor(() => video.readyState >= 2, 20000, `${s.url} to decode`);
+    check('  decoder reports a picture', video.videoWidth > 0 && video.videoHeight > 0, true);
+    say(`       ${video.videoWidth}x${video.videoHeight}`);
+    await video.play();
+    await waitFor(() => video.currentTime > 0.4, 15000, `${s.url} to advance`);
+    check('  playback advances', video.currentTime > 0.4, true);
+    video.pause();
+  } catch (e) {
+    failures++;
+    say(`  FAIL  ${s.url}: ${e.message}`);
+  }
+  await p.dispose();
 }
 post();
 

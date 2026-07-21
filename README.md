@@ -115,6 +115,20 @@ the buffered region has already been read past and its packets discarded.
 Without re-reading it, subtitles do not appear until the buffer drains — up to
 20 seconds that looks exactly like a broken renderer.
 
+**Two config records that look copyable are not.** Matroska's `OpusHead` and
+MP4's `dOps` carry the same fields, but OpusHead is little-endian and starts at
+version 1 while dOps is big-endian and must be version 0. Stripping the 8-byte
+magic and using the rest — which is what the code did — turned a pre-skip of
+312 into 14337 and a sample rate of 48000 into 2159738880. Likewise VP9 has no
+CodecPrivate in Matroska at all, so profile and bit depth have to come from a
+keyframe header; a hardcoded codec string declared 8-bit Profile 0 content as
+10-bit Profile 2.
+
+Both were found the same way, and both failed the same way: ffmpeg accepted the
+output, and Chrome silently detached the MediaSource with no error on the
+element. That is the third instance of that exact signature in this project,
+after the short `tkhd`.
+
 **Chromium defers media loading while `document.hidden`.** A background window
 leaves `MediaSource` at `closed` and `networkState` at `LOADING` forever. The
 player waits for visibility instead of failing; the test harness forces its
