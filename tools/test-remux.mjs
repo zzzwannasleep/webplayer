@@ -5,7 +5,7 @@ import { openSync, readSync, statSync, closeSync, writeFileSync, mkdirSync } fro
 import { execFileSync } from 'node:child_process';
 import { MatroskaDemuxer, TRACK_VIDEO, TRACK_AUDIO } from '../src/demux/matroska.js';
 import { buildRemuxer } from '../src/remux/tracks.js';
-import { colourFromTrack } from '../src/demux/hevc.js';
+import { colourFromTrack, parseHvcC, scanAccessUnit } from '../src/demux/hevc.js';
 
 class NodeSource {
   constructor(p) { this.fd = openSync(p, 'r'); this.size = statSync(p).size; }
@@ -52,17 +52,34 @@ for (const [file, exp] of Object.entries(FILES)) {
     if (!rx) { console.log(`  --   ${label}: no repackaging path for ${track.codecId} (needs software decode)`); continue; }
     console.log(`  ${label}: ${track.codecId} -> ${rx.mime}`);
 
+    // The player recovers static HDR metadata from SEI and hangs it on the
+    // track before building the remuxer. Doing the same here is not just to
+    // make the test pass: forgetting this step drops mdcv/clli silently, and
+    // the assertions below are what would catch that in the player too.
+    if (label === 'video' && track.codecId === 'V_MPEGH/ISO/HEVC') {
+      const lenSize = (parseHvcC(track.codecPrivate)?.lengthSizeMinusOne ?? 3) + 1;
+      let seen = 0;
+      for await (const b of dx.readBlocks(dx.seekPosition(0, track.number), 2 << 20)) {
+        if (b.track !== track.number) continue;
+        const r = scanAccessUnit(b.data, lenSize);
+        track.mastering ??= r.mastering;
+        track.cll ??= r.cll;
+        if (++seen > 30) break;
+      }
+    }
+    const rx2 = buildRemuxer(track, dx.duration);   // rebuild now that SEI is known
+
     // Collect ~4s of samples starting from the first keyframe.
-    const parts = [rx.initSegment()];
+    const parts = [rx2.initSegment()];
     let n = 0, t0 = null;
     for await (const b of dx.readBlocks(dx.seekPosition(0, track.number), 24 << 20)) {
       if (b.track !== track.number) continue;
       if (t0 === null) { if (label === 'video' && !b.keyframe) continue; t0 = b.time; }
       if (b.time - t0 > 4) break;
-      rx.push(b); n++;
-      if (rx.pendingCount >= 120) parts.push(rx.flush());
+      rx2.push(b); n++;
+      if (rx2.pendingCount >= 120) parts.push(rx2.flush());
     }
-    const tail = rx.flush(); if (tail) parts.push(tail);
+    const tail = rx2.flush(); if (tail) parts.push(tail);
     if (!n) { console.log(`  --   ${label}: no samples`); continue; }
 
     let total = 0; for (const p of parts) total += p.length;
@@ -93,6 +110,34 @@ for (const [file, exp] of Object.entries(FILES)) {
         check('colr matrix round-trip', s.color_space, exp.space);
       } else {
         console.log('       (no colour description in SPS -> colr box intentionally omitted)');
+      }
+
+      // mdcv / clli round-trip. ffprobe surfaces these as frame side data, so
+      // a pass here means an independent demuxer found the boxes AND parsed
+      // the field order -- which is G,B,R, not R,G,B.
+      if (track.mastering || track.cll) {
+        const sd = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+          '-read_intervals', '%+#1', '-show_frames', '-show_entries', 'frame=side_data_list',
+          '-of', 'json', path], { encoding: 'utf8' })).frames?.[0]?.side_data_list ?? [];
+        const md = sd.find(d => /Mastering display/i.test(d.side_data_type));
+        const cl = sd.find(d => /Content light/i.test(d.side_data_type));
+        if (track.mastering) {
+          check('mdcv survives into the MP4', !!md, true);
+          // 34000 in units of 1/50000 is what the SEI carried for red_x.
+          check('mdcv red_x round-trip', md?.red_x, `${track.mastering.red[0]}/50000`);
+          check('mdcv green_y round-trip', md?.green_y, `${track.mastering.green[1]}/50000`);
+          check('mdcv max luminance round-trip', md?.max_luminance, `${track.mastering.maxLuminance}/10000`);
+        }
+        if (track.cll) {
+          check('clli survives into the MP4', !!cl, true);
+          check('clli MaxCLL round-trip', cl?.max_content, track.cll.maxCLL);
+          check('clli MaxFALL round-trip', cl?.max_average, track.cll.maxFALL);
+        }
+      } else if (exp.transfer === 'smpte2084') {
+        // An HDR file with no static metadata recovered means the SEI scan
+        // silently found nothing -- exactly the failure this guards against.
+        failures++;
+        console.log('  FAIL  HDR file yielded no mastering/CLL metadata from SEI');
       }
     } else {
       check('ffprobe channels', s.channels, track.audio.channels);

@@ -248,18 +248,101 @@ export function isHdr(colour) {
  * DV carries its RPU in unspecified NAL type 62 and EL data in type 63.
  */
 export function scanDolbyVisionNals(data, lengthSize = 4) {
-  let rpu = false, el = false, p = 0;
-  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const { rpu, el } = scanAccessUnit(data, lengthSize);
+  return { rpu, el };
+}
+
+const SEI_MASTERING_DISPLAY = 137, SEI_CONTENT_LIGHT_LEVEL = 144, SEI_USER_DATA_T35 = 4;
+
+/**
+ * Everything an access unit can say about its own dynamic range, in one pass.
+ *
+ * The container carries none of this. Four separate mechanisms end up here:
+ *
+ *   * static HDR10 mastering metadata and content light levels, as SEI 137/144
+ *   * HDR10+ (SMPTE ST 2094-40) and HDR Vivid (CUVA), both hiding inside
+ *     ITU-T T.35 user data (SEI 4) and told apart only by their registration
+ *     codes
+ *   * Dolby Vision, in NAL types 62 and 63
+ *
+ * The two T.35 formats are mutually exclusive in practice but nothing stops a
+ * file carrying both, so both are reported rather than the first one found.
+ */
+export function scanAccessUnit(data, lengthSize = 4) {
+  const out = { rpu: false, el: false, hdr10plus: false, hdrVivid: false,
+                mastering: null, cll: null };
+  let p = 0;
   while (p + lengthSize <= data.length) {
     let len = 0;
     for (let i = 0; i < lengthSize; i++) len = (len << 8) | data[p + i];
     p += lengthSize;
     if (len <= 0 || p + len > data.length) break;
-    const nalType = (data[p] >> 1) & 0x3f;
-    if (nalType === 62) rpu = true;
-    else if (nalType === 63) el = true;
+    const nal = data.subarray(p, p + len);
+    const nalType = (nal[0] >> 1) & 0x3f;
+    if (nalType === 62) out.rpu = true;
+    else if (nalType === 63) out.el = true;
+    else if (nalType === 39 || nalType === 40) parseSeiNal(nal, out);
     p += len;
   }
-  void dv;
-  return { rpu, el };
+  return out;
+}
+
+/** Walk the sei_message() list in one SEI NAL. */
+function parseSeiNal(nal, out) {
+  // Emulation prevention bytes have to go before any of the fixed-width reads
+  // below, or a 0x000003 inside a payload shifts everything after it.
+  const rbsp = unescapeRbsp(nal);
+  let p = 2;   // past the two-byte NAL header
+  while (p < rbsp.length) {
+    let type = 0;
+    while (p < rbsp.length && rbsp[p] === 0xff) { type += 255; p++; }
+    if (p >= rbsp.length) return;
+    type += rbsp[p++];
+    let size = 0;
+    while (p < rbsp.length && rbsp[p] === 0xff) { size += 255; p++; }
+    if (p >= rbsp.length) return;
+    size += rbsp[p++];
+    if (size <= 0 || p + size > rbsp.length) return;
+    readSeiPayload(type, rbsp.subarray(p, p + size), out);
+    p += size;
+    if (rbsp[p] === 0x80) return;   // rbsp_trailing_bits
+  }
+}
+
+function readSeiPayload(type, body, out) {
+  const u16 = i => (body[i] << 8) | body[i + 1];
+  const u32 = i => ((body[i] << 24) | (body[i + 1] << 16) | (body[i + 2] << 8) | body[i + 3]) >>> 0;
+
+  if (type === SEI_MASTERING_DISPLAY && body.length >= 24) {
+    // Primaries are stored G, B, R -- not R, G, B. Getting that order wrong
+    // produces a plausible-looking gamut that is simply the wrong one.
+    out.mastering = {
+      green: [u16(0), u16(2)], blue: [u16(4), u16(6)], red: [u16(8), u16(10)],
+      whitePoint: [u16(12), u16(14)],
+      maxLuminance: u32(16), minLuminance: u32(20),   // units of 0.0001 cd/m^2
+    };
+    return;
+  }
+  if (type === SEI_CONTENT_LIGHT_LEVEL && body.length >= 4) {
+    out.cll = { maxCLL: u16(0), maxFALL: u16(2) };
+    return;
+  }
+  if (type !== SEI_USER_DATA_T35 || body.length < 6) return;
+
+  // ITU-T T.35: a country code, then whatever that country's registrant says.
+  let i = 0;
+  const country = body[i++];
+  if (country === 0xff) i++;                       // extension byte
+  const provider = (body[i] << 8) | body[i + 1]; i += 2;
+  const oriented = (body[i] << 8) | body[i + 1]; i += 2;
+
+  // HDR10+: US (0xB5), provider 0x003C, oriented 0x0001, application id 4.
+  if (country === 0xb5 && provider === 0x003c && oriented === 0x0001 && body[i] === 4) {
+    out.hdr10plus = true;
+    return;
+  }
+  // HDR Vivid / CUVA: China (0x26), provider 0x0004, oriented 0x0005.
+  if (country === 0x26 && provider === 0x0004 && oriented === 0x0005) {
+    out.hdrVivid = true;
+  }
 }

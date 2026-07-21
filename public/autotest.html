@@ -38,7 +38,8 @@ const check = (label, actual, expected) => {
 const FILES = [
   { url: '/mozahngtantexiaoass.mkv', w: 1920, h: 1080, hdr: false, dv: false, fonts: 28, subs: 2, audioOk: true,  audio: 'AAC',   sub: 'ass' },
   { url: '/qinyinshaonvpgs.mkv',     w: 1920, h: 1080, hdr: false, dv: false, fonts: 0,  subs: 3, audioOk: true,  audio: 'FLAC',  sub: 'pgs' },
-  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs' },
+  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs',
+    hdr10plus: true, peakNits: 1000, maxCLL: 329, maxFALL: 142 },
 ];
 
 /**
@@ -113,6 +114,17 @@ for (const f of FILES) {
     check('subtitle track count', info.subtitles.length, f.subs);
     check('embedded fonts', info.fonts, f.fonts);
     check('HDR detected', !!info.hdr, f.hdr);
+    check('HDR10+ detected', info.hdr10plus, !!f.hdr10plus);
+    check('HDR Vivid detected', info.hdrVivid, !!f.hdrVivid);
+    if (f.hdr) {
+      // Static HDR metadata comes from SEI, not the container, and is what a
+      // display uses to tone-map. Missing it is silent -- the picture is just
+      // graded wrong -- so the exact values are asserted.
+      check('mastering display recovered from SEI', !!info.mastering, true);
+      check('mastering peak luminance (nits)', info.mastering && info.mastering.maxLuminance / 10000, f.peakNits);
+      check('MaxCLL', info.cll?.maxCLL, f.maxCLL);
+      check('MaxFALL', info.cll?.maxFALL, f.maxFALL);
+    }
     check('Dolby Vision detected', !!info.dolbyVision, f.dv);
     if (info.dolbyVision) {
       check('DV single layer (playable as HDR10)', info.dolbyVision.playable, true);

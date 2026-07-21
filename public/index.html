@@ -112,6 +112,7 @@ async function load(input) {
 function render() {
   const badges = [];
   if (info.hdr) badges.push(`<span class="badge b-hdr">HDR ${info.hdr.transfer}</span>`);
+  if (info.dynamicHdr) badges.push(`<span class="badge b-hdr">${info.hdr10plus ? 'HDR10+' : 'HDR Vivid'}</span>`);
   if (info.dolbyVision) {
     badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
   }
@@ -122,8 +123,11 @@ function render() {
       <dt>size</dt><dd>${fmtBytes(info.size)}</dd>
       <dt>duration</dt><dd>${fmtTime(info.duration)}</dd>
       ${info.hdr ? `<dt>colour</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
+      ${info.mastering ? `<dt>mastered</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits peak</dd>` : ''}
+      ${info.cll ? `<dt>light level</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
       <dt>fonts</dt><dd>${info.fonts} embedded</dd>
     </dl>
+    ${info.dynamicHdr ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
     ${info.dolbyVision ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dolbyVision.note}</div>` : ''}`;
 
   const sel = (id, items, fmt) => items.length

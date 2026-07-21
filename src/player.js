@@ -5,7 +5,7 @@
 // and casting -- all of which a WebCodecs+canvas pipeline throws away.
 import { MatroskaDemuxer, FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE } from './demux/matroska.js';
 import { buildRemuxer, SUBTITLE_CODECS } from './remux/tracks.js';
-import { colourFromTrack, isHdr, parseHvcC, scanDolbyVisionNals, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
+import { colourFromTrack, isHdr, parseHvcC, scanAccessUnit, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
 
 const BUFFER_AHEAD = 20;          // seconds of media to keep ahead of the playhead
 const KEEP_BEHIND = 12;           // seconds retained behind it before eviction
@@ -98,7 +98,8 @@ export class Player {
     const dx = this.demuxer;
     const out = { name: dx.src.name, duration: dx.duration, size: dx.src.size,
                   video: [], audio: [], subtitles: [], attachments: dx.attachments.length,
-                  fonts: 0, hdr: null, dolbyVision: null };
+                  fonts: 0, hdr: null, dolbyVision: null, dynamicHdr: null,
+                  hdr10plus: false, hdrVivid: false, mastering: null, cll: null };
 
     for (const t of dx.tracks) {
       if (t.type === TRACK_VIDEO) {
@@ -126,17 +127,40 @@ export class Player {
 
     out.fonts = dx.attachments.filter(f => /font|sfnt/i.test(f.mime) || /\.(ttf|otf|ttc)$/i.test(f.name)).length;
 
-    // Dolby Vision detection: probe real access units for the RPU NAL. The
-    // presence of an EL NAL is what separates dual-layer P7 from single-layer P8.
+    // Everything below comes from the bitstream, not the container: dynamic
+    // range metadata, Dolby Vision, HDR10+ and HDR Vivid all live in the access
+    // units. One scan collects the lot -- the alternative is several passes
+    // over the same 2 MB.
     const v = out.video[0]?.track;
     if (v?.codecId === 'V_MPEGH/ISO/HEVC') {
       const lenSize = (parseHvcC(v.codecPrivate)?.lengthSizeMinusOne ?? 3) + 1;
       let rpu = false, el = false, n = 0;
       for await (const b of dx.readBlocks(dx.seekPosition(0, v.number), 2 << 20)) {
         if (b.track !== v.number) continue;
-        const r = scanDolbyVisionNals(b.data, lenSize);
+        const r = scanAccessUnit(b.data, lenSize);
         rpu ||= r.rpu; el ||= r.el;
+        out.hdr10plus ||= r.hdr10plus;
+        out.hdrVivid ||= r.hdrVivid;
+        // Stored on the track so buildRemuxer writes mdcv/clli into the MP4.
+        v.mastering ??= r.mastering;
+        v.cll ??= r.cll;
         if (++n > 30) break;
+      }
+      out.mastering = v.mastering ?? null;
+      out.cll = v.cll ?? null;
+      if (out.hdr10plus) {
+        out.dynamicHdr = {
+          format: 'HDR10+ (SMPTE ST 2094-40)',
+          // The browser has no HDR10+ tone-mapping path, and the metadata is
+          // per-frame -- there is nowhere to put it. Saying so beats implying
+          // the extra dynamic range is being used.
+          note: 'Detected and preserved in the stream, but Chromium tone-maps from the static HDR10 metadata only.',
+        };
+      } else if (out.hdrVivid) {
+        out.dynamicHdr = {
+          format: 'HDR Vivid / CUVA (T/UWA 005)',
+          note: 'Detected. No browser implements CUVA tone-mapping; the base layer plays as HDR10.',
+        };
       }
       if (rpu) {
         out.dolbyVision = {

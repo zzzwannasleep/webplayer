@@ -63,12 +63,23 @@ function colrBox(colour) {
              bytes(colour.fullRange ? 0x80 : 0x00));
 }
 
-/** Static HDR10 mastering display + content light level, when known. */
+/**
+ * Static HDR10 metadata: `mdcv` (mastering display) and `clli` (content light
+ * level), recovered from SEI 137/144 by src/demux/hevc.js.
+ *
+ * Without these a display has no idea what the content was graded on and has
+ * to guess when tone-mapping to its own peak brightness. The field order is
+ * the SEI's own -- primaries are GREEN, BLUE, RED, which is not the order
+ * anyone expects and is silent when wrong: the gamut is merely the wrong one.
+ */
 function hdrBoxes(mastering, cll) {
   const out = [];
   if (mastering) {
-    const { display, luminance } = mastering;
-    out.push(box('mdcv', u16(...display), u32(luminance[0], luminance[1])));
+    const m = mastering;
+    out.push(box('mdcv',
+      u16(m.green[0], m.green[1], m.blue[0], m.blue[1], m.red[0], m.red[1],
+          m.whitePoint[0], m.whitePoint[1]),
+      u32(m.maxLuminance, m.minLuminance)));
   }
   if (cll) out.push(box('clli', u16(cll.maxCLL, cll.maxFALL)));
   return out;
