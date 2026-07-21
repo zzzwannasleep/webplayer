@@ -315,7 +315,7 @@ try {
   await waitFor(() => frame.contentWindow.player, 15000, 'index.html module to finish executing');
   check('the page module executed to completion', !!frame.contentWindow.player, true);
   const doc = frame.contentDocument;
-  for (const id of ['video', 'playBtn', 'file', 'extSub', 'loadAss', 'meta', 'tracks', 'log']) {
+  for (const id of ['video', 'playBtn', 'file', 'extSub', 'url', 'loadUrl', 'pickFile', 'meta', 'tracks', 'log', 'placeholder']) {
     check(`#${id} exists`, !!doc.getElementById(id), true);
   }
   await new Promise(r => setTimeout(r, 500));

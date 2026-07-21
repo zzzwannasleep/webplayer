@@ -3,70 +3,191 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>webplayer</title>
 <style>
-  :root { color-scheme: dark; --bg:#0b0d10; --panel:#14181d; --line:#242a31; --fg:#e6e9ec; --dim:#8b949e; --acc:#4a9eff; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
-  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.02em; }
-  main { display:grid; grid-template-columns:1fr 340px; gap:16px; padding:16px; align-items:start; }
-  @media (max-width:900px){ main{grid-template-columns:1fr} }
-  #stage { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; }
-  video { width:100%; height:100%; display:block; background:#000; }
-  /* Both subtitle renderers append their own canvas next to the video. They
-     must not sit below it, resize the layout, or swallow clicks on the
-     controls underneath. */
-  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-  aside { display:flex; flex-direction:column; gap:12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
-  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 8px; font-weight:600; }
-  button, select, input[type=file]::file-selector-button {
-    background:#1d232a; color:var(--fg); border:1px solid var(--line); border-radius:4px;
-    padding:6px 12px; font:inherit; cursor:pointer;
+  :root {
+    color-scheme: dark;
+    --bg:#0a0c0f; --panel:#12161b; --panel-2:#171c22; --line:#232a33;
+    --fg:#e8ecf1; --dim:#8a95a3; --faint:#5c6672;
+    --acc:#4c9aff; --acc-dim:#2b5c99;
+    --ok:#5fd68a; --warn:#f0b429; --err:#ff6b63; --dv:#f5c451;
+    --r:8px;
   }
-  button:hover { border-color:var(--acc); }
-  button:disabled { opacity:.4; cursor:default; }
-  select { width:100%; margin-bottom:6px; }
-  input[type=file] { color:var(--dim); font-size:13px; }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:13px; }
-  .kv dt { color:var(--dim); }
-  .kv dd { margin:0; font-variant-numeric:tabular-nums; }
-  .badge { display:inline-block; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:600; letter-spacing:.03em; }
-  .b-hdr { background:#1a3a2a; color:#5fd68a; } .b-dv { background:#3a2a1a; color:#f0b429; }
-  .b-warn{ background:#3a1a1a; color:#ff7b72; } .b-ok { background:#1a2a3a; color:#6cb6ff; }
-  #log { font:11px/1.45 ui-monospace,Consolas,monospace; max-height:170px; overflow:auto; white-space:pre-wrap; color:var(--dim); }
-  #log .error { color:#ff7b72; } #log .warn { color:#f0b429; }
-  .empty { color:var(--dim); font-size:13px; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.55 ui-sans-serif,system-ui,"Segoe UI",-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button, input, select { font:inherit; color:inherit; }
+
+  /* ---------- header ---------- */
+  header {
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:12px 20px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#12161b,#0f1317);
+  }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:650; letter-spacing:-.01em; }
+  .brand svg { width:19px; height:19px; color:var(--acc); }
+  .brand small { color:var(--faint); font-weight:400; font-size:11px; letter-spacing:.04em; }
+  .spacer { flex:1; }
+
+  .btn {
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:7px 13px; cursor:pointer; transition:.14s; white-space:nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color:var(--acc-dim); background:#1c232b; }
+  .btn:disabled { opacity:.38; cursor:default; }
+  .btn.primary { background:var(--acc); border-color:var(--acc); color:#06121f; font-weight:600; }
+  .btn.primary:hover:not(:disabled) { background:#5ea6ff; border-color:#5ea6ff; }
+  .btn.ghost { background:transparent; color:var(--dim); }
+  .btn.ghost:hover { color:var(--fg); }
+
+  /* ---------- open panel ---------- */
+  .open-row { display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; }
+  .url-wrap { display:flex; flex:1; min-width:260px; }
+  .url-wrap input {
+    flex:1; min-width:0; background:#0c1014; border:1px solid var(--line);
+    border-right:0; border-radius:6px 0 0 6px; padding:7px 11px; outline:none;
+  }
+  .url-wrap input:focus { border-color:var(--acc-dim); }
+  .url-wrap input::placeholder { color:var(--faint); }
+  .url-wrap button { border-radius:0 6px 6px 0; }
+
+  /* ---------- layout ---------- */
+  main { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:18px; padding:18px 20px 28px; align-items:start; }
+  @media (max-width:960px) { main { grid-template-columns:minmax(0,1fr); } }
+
+  #stage {
+    position:relative; background:#000; border-radius:var(--r);
+    overflow:hidden; aspect-ratio:16/9; border:1px solid var(--line);
+  }
+  video { width:100%; height:100%; display:block; background:#000; }
+  /* Both subtitle renderers append a canvas next to the video. It must overlay,
+     not displace, and must not swallow clicks on the controls beneath it. */
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+
+  .placeholder {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; color:var(--faint);
+    text-align:center; padding:24px; pointer-events:none;
+  }
+  .placeholder svg { width:40px; height:40px; opacity:.5; }
+  .placeholder b { color:var(--dim); font-weight:500; }
+  .placeholder span { font-size:12.5px; max-width:36ch; }
+
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 14px; }
+  .card > h2 {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--faint); margin:0 0 10px; font-weight:650;
+  }
+
+  select {
+    width:100%; background:#0c1014; border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; margin-bottom:7px; cursor:pointer;
+  }
+  select:hover { border-color:var(--acc-dim); }
+  select:disabled { opacity:.5; cursor:default; }
+  .field { margin-bottom:9px; }
+  .field:last-child { margin-bottom:0; }
+  .field label { display:block; font-size:11px; color:var(--faint); margin-bottom:4px; letter-spacing:.02em; }
+
+  .kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 12px; font-size:13px; margin:0; }
+  .kv dt { color:var(--faint); }
+  .kv dd { margin:0; font-variant-numeric:tabular-nums; min-width:0; overflow-wrap:anywhere; }
+
+  .badges { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:11px; }
+  .badge { padding:2px 8px; border-radius:4px; font-size:10.5px; font-weight:650; letter-spacing:.03em; }
+  .b-hdr { background:#12351f; color:var(--ok); }
+  .b-dv  { background:#3a2c12; color:var(--dv); }
+  .b-warn{ background:#3a1614; color:var(--err); }
+  .b-ok  { background:#14283c; color:#7ab8ff; }
+
+  .note { margin-top:9px; font-size:12px; line-height:1.5; color:var(--dim); }
+  .empty { color:var(--faint); font-size:12.5px; }
+
+  details.log summary {
+    cursor:pointer; list-style:none; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--faint); font-weight:650; display:flex;
+    align-items:center; justify-content:space-between;
+  }
+  details.log summary::-webkit-details-marker { display:none; }
+  details.log summary::after { content:'▾'; transition:.15s; }
+  details.log[open] summary::after { transform:rotate(180deg); }
+  #log {
+    font:11px/1.5 ui-monospace,Consolas,monospace; max-height:220px; overflow:auto;
+    white-space:pre-wrap; color:var(--dim); margin-top:9px; overflow-wrap:anywhere;
+  }
+  #log .error { color:var(--err); } #log .warn { color:var(--warn); }
+  #log time { color:var(--faint); margin-right:6px; }
+
+  /* ---------- drag & drop ---------- */
+  #drop {
+    position:fixed; inset:0; z-index:50; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(10,12,15,.86); backdrop-filter:blur(3px);
+    border:2px dashed var(--acc); font-size:16px; color:var(--acc);
+  }
+  body.dragging #drop { display:flex; }
 </style>
 
 <header>
-  <h1>webplayer</h1>
-  <input type="file" id="file" accept=".mkv,.webm,.mp4">
-  <span class="empty">or</span>
-  <button id="loadHoushi">houshi.mkv (4K DV)</button>
-  <button id="loadAss">ASS 特效</button>
-  <button id="loadPgs">PGS</button>
-  <span class="empty">·</span>
-  <label class="empty" style="font-size:13px">外挂字幕 <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa"></label>
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
+    </svg>
+    webplayer <small>MKV · HDR · DV · ASS/PGS</small>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn" id="pickFile">打开本地文件…</button>
+  <button class="btn ghost" id="pickSub">外挂字幕…</button>
+  <input type="file" id="file" accept=".mkv,.webm,.mp4,.m4v" hidden>
+  <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa" hidden>
 </header>
 
 <main>
-  <div id="stage"><video id="video" controls playsinline></video></div>
+  <div>
+    <div id="stage">
+      <video id="video" controls playsinline></video>
+      <div class="placeholder" id="placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
+        </svg>
+        <b>拖入视频文件，或粘贴一个直链</b>
+        <span>MKV 直接播放，不转码 — HDR、Dolby Vision、特效 ASS 与 PGS 字幕原样保留</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="open-row">
+        <div class="url-wrap">
+          <input id="url" type="url" spellcheck="false"
+                 placeholder="https://example.com/video.mkv — 需服务器支持 Range 与 CORS">
+          <button class="btn" id="loadUrl">打开链接</button>
+        </div>
+        <button class="btn primary" id="playBtn" disabled>播放</button>
+      </div>
+      <div id="samples" style="margin-top:9px;display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+  </div>
+
   <aside>
     <div class="card">
-      <h2>Source</h2>
-      <div id="meta" class="empty">no file loaded</div>
+      <h2>来源</h2>
+      <div id="meta" class="empty">尚未载入</div>
     </div>
     <div class="card">
-      <h2>Tracks</h2>
+      <h2>轨道</h2>
       <div id="tracks" class="empty">—</div>
-      <button id="playBtn" disabled style="width:100%;margin-top:8px">Play</button>
     </div>
-    <div class="card">
-      <h2>Log</h2>
+    <details class="card log" id="logCard">
+      <summary>日志</summary>
       <div id="log"></div>
-    </div>
+    </details>
   </aside>
 </main>
+
+<div id="drop">松开以载入</div>
 
 <script type="module">
 import { Player } from '../src/player.js';
@@ -81,82 +202,112 @@ const logEl = $('#log');
 player.log = (msg, level = 'info') => {
   const line = document.createElement('div');
   line.className = level;
-  line.textContent = `${new Date().toLocaleTimeString('en-GB')}  ${msg}`;
+  const t = document.createElement('time');
+  t.textContent = new Date().toLocaleTimeString('en-GB');
+  line.append(t, msg);
   logEl.append(line);
   logEl.scrollTop = logEl.scrollHeight;
+  // Surface problems without making the user go looking for them.
+  if (level === 'error') $('#logCard').open = true;
 };
 
 const fmtBytes = n => n > 1e9 ? `${(n / 2 ** 30).toFixed(2)} GB` : `${(n / 2 ** 20).toFixed(1)} MB`;
 const fmtTime = s => {
+  if (!Number.isFinite(s) || s <= 0) return '未知';
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
-  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+           : `${m}:${String(sec).padStart(2, '0')}`;
 };
 
 let info = null;
 
 async function load(input) {
   $('#playBtn').disabled = true;
-  $('#meta').textContent = 'reading…';
+  $('#meta').textContent = '读取中…';
   try {
+    await subs.destroy();
     const t0 = performance.now();
     info = await player.load(input);
-    player.log(`parsed header in ${(performance.now() - t0).toFixed(0)}ms`);
+    player.log(`解析头部用时 ${(performance.now() - t0).toFixed(0)}ms`);
     render();
   } catch (e) {
-    $('#meta').innerHTML = `<span class="badge b-warn">error</span> ${e.message}`;
+    info = null;
+    $('#meta').innerHTML = `<span class="badge b-warn">失败</span> <div class="note">${explain(e, input)}</div>`;
     player.log(e.message, 'error');
     console.error(e);
   }
 }
 
+/**
+ * A failed remote load is almost always one of two server-side things, and
+ * "Failed to fetch" tells the user neither of them. Seeking needs Range, and a
+ * cross-origin file needs CORS; both are the server's to fix, not the page's.
+ */
+function explain(e, input) {
+  const remote = typeof input === 'string';
+  if (!remote) return e.message;
+  if (/does not support Range/i.test(e.message)) {
+    return `${e.message}。播放器靠 Range 请求做 seek 与分段读取，服务器必须返回 <code>Accept-Ranges: bytes</code>。`;
+  }
+  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) {
+    return `无法读取该地址。跨域文件需要服务器返回 <code>Access-Control-Allow-Origin</code>，`
+         + `并在 <code>Access-Control-Expose-Headers</code> 里放行 <code>Accept-Ranges, Content-Length, Content-Range</code>。`;
+  }
+  return e.message;
+}
+
 function render() {
+  $('#placeholder').style.display = 'none';
+
   const badges = [];
   if (info.hdr) badges.push(`<span class="badge b-hdr">HDR ${info.hdr.transfer}</span>`);
   if (info.dynamicHdr) badges.push(`<span class="badge b-hdr">${info.hdr10plus ? 'HDR10+' : 'HDR Vivid'}</span>`);
   if (info.dolbyVision) {
     badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
   }
-  $('#meta').innerHTML = `
-    <div style="margin-bottom:8px">${badges.join(' ') || '<span class="badge b-ok">SDR</span>'}</div>
-    <dl class="kv">
-      <dt>file</dt><dd style="word-break:break-all">${info.name}</dd>
-      <dt>size</dt><dd>${fmtBytes(info.size)}</dd>
-      <dt>duration</dt><dd>${fmtTime(info.duration)}</dd>
-      ${info.hdr ? `<dt>colour</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
-      ${info.mastering ? `<dt>mastered</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits peak</dd>` : ''}
-      ${info.cll ? `<dt>light level</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
-      <dt>fonts</dt><dd>${info.fonts} embedded</dd>
-    </dl>
-    ${info.dynamicHdr ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
-    ${info.dolbyVision ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dolbyVision.note}</div>` : ''}`;
+  if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
 
-  const sel = (id, items, fmt) => items.length
-    ? `<select id="${id}">${items.map((x, i) => `<option value="${i}">${fmt(x)}</option>`).join('')}</select>`
-    : `<div class="empty" style="margin-bottom:6px">no ${id} track</div>`;
+  $('#meta').innerHTML = `
+    <div class="badges">${badges.join('')}</div>
+    <dl class="kv">
+      <dt>文件</dt><dd>${info.name}</dd>
+      <dt>大小</dt><dd>${fmtBytes(info.size)}</dd>
+      <dt>时长</dt><dd>${fmtTime(info.duration)}</dd>
+      ${info.hdr ? `<dt>色彩</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
+      ${info.mastering ? `<dt>母版</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits 峰值</dd>` : ''}
+      ${info.cll ? `<dt>亮度</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
+      ${info.fonts ? `<dt>字体</dt><dd>${info.fonts} 个内嵌</dd>` : ''}
+    </dl>
+    ${info.dynamicHdr ? `<div class="note">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
+    ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
+
+  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
+    ? `<div class="field"><label>${label}</label><select id="${id}">${
+        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
+    : `<div class="field"><label>${label}</label><div class="empty">无</div></div>`;
 
   $('#tracks').innerHTML =
-    sel('videoSel', info.video, x => `${x.label}${x.supported ? '' : '  ✕ unsupported'}`) +
-    sel('audioSel', info.audio, x => `${x.label}${x.supported ? '' : `  ✕ ${x.note.name} — needs a decoder`}`) +
-    (info.subtitles.length
-      ? `<select id="subSel"><option value="-1">subtitles: off</option>${
-          info.subtitles.map((x, i) => {
-            const ok = Subtitles.SUPPORTED.has(x.format);
-            return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : '  ✕ no renderer'}</option>`;
-          }).join('')}</select>`
-      : '<div class="empty">no subtitle track</div>');
+    field('视频', 'videoSel', info.video,
+      (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
+    field('音频', 'audioSel', info.audio,
+      (x, i) => `<option value="${i}">${x.label}${x.supported ? '' : ` — ${x.note.name}，软解`}</option>`) +
+    field('字幕', 'subSel', info.subtitles,
+      (x, i) => {
+        const ok = Subtitles.SUPPORTED.has(x.format);
+        return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : ' ✕ 无渲染器'}</option>`;
+      }, '<option value="-1">关闭</option>');
 
   $('#subSel')?.addEventListener('change', async e => {
     const idx = Number(e.target.value);
     e.target.disabled = true;
     try { await subs.select(idx); }
-    catch (err) { player.log(`subtitles: ${err.message}`, 'error'); console.error(err); }
+    catch (err) { player.log(`字幕: ${err.message}`, 'error'); console.error(err); }
     finally { e.target.disabled = false; }
   });
 
   for (const a of info.audio) {
     if (a.supported) continue;
-    // Say what it is and what it would take, not just "unsupported".
-    player.log(`${a.note.name} cannot play: ${a.note.reason} ${a.note.route}`, 'warn');
+    player.log(`${a.note.name}: ${a.note.reason} ${a.note.route}`, 'warn');
     if (a.note.downmix) player.log(a.note.downmix, 'warn');
   }
   $('#playBtn').disabled = !info.video.some(v => v.supported);
@@ -166,15 +317,14 @@ $('#playBtn').addEventListener('click', async () => {
   $('#playBtn').disabled = true;
   try {
     // A new play() rebuilds the MediaSource and restarts reading, so any
-    // renderer from the previous run is holding events for a timeline that no
-    // longer exists.
+    // renderer from the previous run holds events for a timeline that is gone.
     await subs.destroy();
     if ($('#subSel')) $('#subSel').value = '-1';
     await player.play({
       videoIndex: Number($('#videoSel')?.value ?? 0),
       audioIndex: Number($('#audioSel')?.value ?? 0),
     });
-    await video.play().catch(e => player.log(`autoplay blocked: ${e.message}`, 'warn'));
+    await video.play().catch(e => player.log(`自动播放被拦截: ${e.message}`, 'warn'));
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);
@@ -183,38 +333,82 @@ $('#playBtn').addEventListener('click', async () => {
   }
 });
 
+// ---- opening things ------------------------------------------------------
+$('#pickFile').addEventListener('click', () => $('#file').click());
+$('#pickSub').addEventListener('click', () => $('#extSub').click());
 $('#file').addEventListener('change', e => { if (e.target.files[0]) load(e.target.files[0]); });
 
-// External subtitle file. SRT and VTT go to the browser's own text track
-// renderer; there is nothing to gain from drawing those ourselves.
+const openUrl = () => {
+  const u = $('#url').value.trim();
+  if (u) load(u);
+};
+$('#loadUrl').addEventListener('click', openUrl);
+$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') openUrl(); });
+
+// Drag and drop anywhere on the page.
+let dragDepth = 0;
+addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  // Subtitles and video arrive the same way; tell them apart by extension
+  // rather than making the user aim at the right drop target.
+  if (/\.(srt|vtt|ass|ssa)$/i.test(f.name)) loadSubtitleFile(f);
+  else load(f);
+});
+
+// External subtitles. SRT and VTT go to the browser's own text track renderer;
+// there is nothing to gain from drawing those ourselves.
 let extTrack = null;
-$('#extSub').addEventListener('change', async e => {
-  const file = e.target.files[0];
-  if (!file) return;
+async function loadSubtitleFile(file) {
   extTrack?.remove();
   extTrack = null;
   try {
-    const text = await file.text();
     if (/\.(ass|ssa)$/i.test(file.name)) {
-      // Not wired up: an external ASS script needs its fonts from the system
-      // rather than the MKV, which is a different problem from the embedded
-      // case and is not solved by pretending it loaded.
-      player.log('external ASS is not supported yet — only embedded ASS tracks', 'warn');
+      // Not wired up: an external ASS script has to find its fonts on the
+      // system rather than in the MKV, which is a different problem and is not
+      // solved by pretending the file loaded.
+      player.log('外挂 ASS 暂不支持 — 只支持 MKV 内嵌 ASS 轨（内嵌字体是关键）', 'warn');
       return;
     }
-    extTrack = attachSrt(video, text, { label: file.name, language: 'und' });
-    player.log(`external subtitles: ${file.name} (${extTrack.track.cues?.length ?? '…'} cues)`);
+    extTrack = attachSrt(video, await file.text(), { label: file.name, language: 'und' });
+    player.log(`外挂字幕: ${file.name}（${extTrack.track.cues?.length ?? '…'} 条）`);
   } catch (err) {
-    player.log(`external subtitles: ${err.message}`, 'error');
+    player.log(`外挂字幕: ${err.message}`, 'error');
   }
-});
-$('#loadHoushi').addEventListener('click', () => load('/houshi.mkv'));
-$('#loadAss').addEventListener('click', () => load('/mozahngtantexiaoass.mkv'));
-$('#loadPgs').addEventListener('click', () => load('/qinyinshaonvpgs.mkv'));
+}
+$('#extSub').addEventListener('change', e => { if (e.target.files[0]) loadSubtitleFile(e.target.files[0]); });
+
+// Sample shortcuts, but only the ones this server is actually serving.
+const SAMPLES = [
+  { url: '/houshi.mkv', label: '4K DV + HDR10+' },
+  { url: '/mozahngtantexiaoass.mkv', label: 'ASS 特效' },
+  { url: '/qinyinshaonvpgs.mkv', label: 'PGS 字幕' },
+  { url: '/samples/audio-multi.mkv', label: 'DTS/TrueHD/AC3' },
+];
+for (const s of SAMPLES) {
+  // A HEAD that fails means the file is not there; showing a button that
+  // cannot work is worse than showing nothing.
+  fetch(s.url, { method: 'HEAD' }).then(r => {
+    if (!r.ok) return;
+    const b = document.createElement('button');
+    b.className = 'btn ghost';
+    b.style.fontSize = '12px';
+    b.textContent = s.label;
+    b.addEventListener('click', () => load(s.url));
+    $('#samples').append(b);
+  }).catch(() => {});
+}
 
 video.addEventListener('error', () => {
   const e = video.error;
-  if (e) player.log(`<video> error ${e.code}: ${e.message || '(no message)'}`, 'error');
+  if (e) player.log(`<video> 错误 ${e.code}: ${e.message || '(无信息)'}`, 'error');
 });
 window.player = player;
+window.subs = subs;
 </script>
