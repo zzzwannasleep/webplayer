@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>audio probe</title>
+<style>body{font:12px/1.5 ui-monospace,Consolas,monospace;background:#111;color:#ddd;padding:12px}
+pre{white-space:pre-wrap}b{color:#6cb6ff}.y{color:#5fd68a}.n{color:#ff7b72}</style>
+<pre id="out">probing…</pre>
+<script type="module">
+// What can this browser actually do with the audio in these files?
+//
+// The answer decides whether E-AC3 needs a wasm decoder at all, and if it
+// does, which route the decoded PCM takes back to the speakers. Every entry is
+// measured here rather than assumed: Chromium's AC-3/E-AC3 support depends on
+// the platform's own decoder, so it differs between machines and between
+// headless and headful -- and MSE refusing a codec says nothing about whether
+// WebCodecs will take it.
+const out = document.getElementById('out');
+const lines = [];
+const say = s => { lines.push(s); out.textContent = lines.join('\n'); };
+const post = () => fetch('/collect', { method: 'POST', body: out.textContent }).catch(() => {});
+const mark = ok => ok ? '<span class="y">yes</span>' : '<span class="n">no</span>';
+
+const render = () => {
+  out.innerHTML = lines.join('\n')
+    .replace(/\byes\b/g, '<span class="y">yes</span>')
+    .replace(/\bno\b/g, '<span class="n">no</span>');
+};
+
+say('=== MediaSource.isTypeSupported ===');
+for (const c of ['ec-3', 'ac-3', 'mp4a.a6', 'mp4a.a5', 'mp4a.40.2', 'opus', 'flac',
+                 'mp4a.40.5', 'dtsc', 'dtse', 'mlpa']) {
+  const mime = `audio/mp4; codecs="${c}"`;
+  say(`  ${c.padEnd(12)} ${MediaSource.isTypeSupported(mime) ? 'yes' : 'no'}`);
+}
+
+say('\n=== <audio>.canPlayType ===');
+for (const c of ['ec-3', 'ac-3', 'mp4a.40.2', 'opus']) {
+  const r = document.createElement('audio').canPlayType(`audio/mp4; codecs="${c}"`);
+  say(`  ${c.padEnd(12)} ${r || 'no'}`);
+}
+
+say('\n=== WebCodecs AudioDecoder ===');
+if (!window.AudioDecoder) say('  AudioDecoder: not available');
+else for (const codec of ['ec-3', 'ac-3', 'mp4a.40.2', 'opus', 'flac', 'vorbis', 'pcm-s16']) {
+  try {
+    const r = await AudioDecoder.isConfigSupported({ codec, sampleRate: 48000, numberOfChannels: 6 });
+    say(`  ${codec.padEnd(12)} ${r.supported ? 'yes' : 'no'}`);
+  } catch (e) { say(`  ${codec.padEnd(12)} no (${e.name})`); }
+}
+
+say('\n=== WebCodecs AudioEncoder (for a transcode route) ===');
+if (!window.AudioEncoder) say('  AudioEncoder: not available');
+else for (const [codec, extra] of [['opus', {}], ['mp4a.40.2', {}], ['pcm-s16', {}]]) {
+  try {
+    const r = await AudioEncoder.isConfigSupported(
+      { codec, sampleRate: 48000, numberOfChannels: 2, bitrate: 192000, ...extra });
+    say(`  ${codec.padEnd(12)} ${r.supported ? 'yes' : 'no'}`);
+  } catch (e) { say(`  ${codec.padEnd(12)} no (${e.name})`); }
+}
+
+say('\n=== WebAudio output ===');
+const ac = new AudioContext();
+say(`  sampleRate            ${ac.sampleRate}`);
+say(`  destination channels  ${ac.destination.maxChannelCount}`);
+say(`  state                 ${ac.state}`);
+// 5.1 content downmixes unless the output really has the channels for it.
+try {
+  ac.destination.channelCount = Math.min(6, ac.destination.maxChannelCount);
+  say(`  6-channel output      ${ac.destination.channelCount >= 6 ? 'yes' : 'no'}`);
+} catch (e) { say(`  6-channel output      no (${e.name})`); }
+ac.close();
+
+say('\n=== isolation (needed by some wasm builds) ===');
+say(`  crossOriginIsolated   ${crossOriginIsolated}`);
+say(`  SharedArrayBuffer     ${typeof SharedArrayBuffer !== 'undefined' ? 'yes' : 'no'}`);
+say(`  hardwareConcurrency   ${navigator.hardwareConcurrency}`);
+
+say(`\nUA ${navigator.userAgent}`);
+render();
+post();
+document.title = 'DONE';
+</script>

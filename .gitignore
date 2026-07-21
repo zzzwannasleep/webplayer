@@ -1,0 +1,27 @@
+node_modules/
+
+# Test media. These live in the repository root so the suites can find them,
+# but they are other people's copyrighted films and one of them is 21 GB.
+*.mkv
+*.mp4
+*.webm
+*.m4a
+*.m4v
+*.srt
+*.ass
+*.ssa
+
+# Built from node_modules by tools/build-vendor.mjs. Not committed: it is
+# 4.5 MB of third-party wasm that `npm install && node tools/build-vendor.mjs`
+# reproduces exactly.
+public/vendor/
+
+# Everything the test suites emit.
+*.sup
+*.eac3
+*.f32
+*.pcm
+*.wav
+*.header.ass
+houshisrt.vtt
+probe-result.txt

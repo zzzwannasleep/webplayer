@@ -1,0 +1,149 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>capability probe</title>
+<style>
+  body{font:13px/1.5 ui-monospace,Consolas,monospace;background:#111;color:#ddd;padding:16px}
+  h2{color:#6cf;font-size:13px;margin:16px 0 6px;border-bottom:1px solid #333;padding-bottom:3px}
+  .y{color:#5d5}.n{color:#e55}.m{color:#fc0}
+  table{border-collapse:collapse}td{padding:1px 12px 1px 0;vertical-align:top}
+  #out{white-space:pre-wrap}
+</style>
+<div id="out">probing…</div>
+<script>
+// Capability probe. Answers the only question that decides the architecture:
+// can this browser take our actual test files' codecs through MSE (HDR passthrough),
+// or must we fall back to WebCodecs+canvas (HDR lost)?
+
+const OUT = document.getElementById('out');
+const lines = [];
+const H = t => lines.push(`\n<h2>${t}</h2>`);
+const row = (label, state, note = '') => {
+  const cls = state === true ? 'y' : state === false ? 'n' : 'm';
+  const mark = state === true ? 'YES' : state === false ? 'no ' : String(state);
+  lines.push(`<span class="${cls}">${mark.padEnd(5)}</span> ${label}${note ? `  <span style="color:#777">${note}</span>` : ''}`);
+};
+
+// --- codec strings matching our real test files -------------------------
+// houshi.mkv       : HEVC Main10 L6.0 4K, bt2020/PQ, DV profile 8.1 + HDR10+
+// mozahngtan*.mkv  : HEVC Main10 L4.0 1080p bt709
+// qinyinshaonv*.mkv: HEVC Main10 L4.0 1080p
+const VIDEO = [
+  ['hvc1.2.4.L150.B0', 'HEVC Main10 L5.0  (4K, houshi.mkv class)'],
+  ['hev1.2.4.L150.B0', 'HEVC Main10 L5.0  hev1 variant'],
+  ['hvc1.2.4.L120.B0', 'HEVC Main10 L4.0  (1080p test files)'],
+  ['hvc1.1.6.L120.B0', 'HEVC Main   L4.0  (8-bit baseline)'],
+  ['dvh1.08.06',       'Dolby Vision profile 8 level 6  <-- houshi.mkv exact'],
+  ['dvhe.08.06',       'Dolby Vision profile 8 level 6 (dvhe)'],
+  ['dvh1.05.06',       'Dolby Vision profile 5 level 6'],
+  ['avc1.640028',      'H.264 High L4.0  (control)'],
+  ['av01.0.08M.10',    'AV1 Main 10-bit'],
+  ['vp09.02.10.10',    'VP9 Profile 2 10-bit'],
+];
+const AUDIO = [
+  ['mp4a.40.2', 'AAC-LC            (mozahngtan*.mkv)'],
+  ['ec-3',      'E-AC3 / DD+       <-- houshi.mkv (+Atmos JOC)'],
+  ['ac-3',      'AC-3'],
+  ['fLaC',      'FLAC              <-- qinyinshaonv*.mkv'],
+  ['opus',      'Opus (control)'],
+  ['mp4a.a6',   'E-AC3 alt tag'],
+];
+
+H('MediaSource.isTypeSupported — video/mp4');
+if (!window.MediaSource) { row('MediaSource API', false); }
+else for (const [c, d] of VIDEO) row(`${c.padEnd(18)} ${d}`, MediaSource.isTypeSupported(`video/mp4; codecs="${c}"`));
+
+H('MediaSource.isTypeSupported — audio/mp4');
+if (window.MediaSource) for (const [c, d] of AUDIO) row(`${c.padEnd(18)} ${d}`, MediaSource.isTypeSupported(`audio/mp4; codecs="${c}"`));
+
+H('<video>.canPlayType (independent of MSE)');
+{
+  const v = document.createElement('video');
+  for (const [c, d] of VIDEO) {
+    const r = v.canPlayType(`video/mp4; codecs="${c}"`);
+    row(`${c.padEnd(18)} ${d}`, r === 'probably' ? true : r === 'maybe' ? 'maybe' : false);
+  }
+}
+
+H('ManagedMediaSource (Safari/iOS MSE)');
+row('ManagedMediaSource', 'ManagedMediaSource' in window);
+
+H('Core platform APIs');
+row('WebCodecs VideoDecoder', 'VideoDecoder' in window);
+row('WebCodecs AudioDecoder', 'AudioDecoder' in window);
+row('WebGPU', 'gpu' in navigator);
+row('WebGL2', !!document.createElement('canvas').getContext('webgl2'));
+row('OffscreenCanvas', 'OffscreenCanvas' in window);
+row('requestVideoFrameCallback', 'requestVideoFrameCallback' in HTMLVideoElement.prototype);
+row('SharedArrayBuffer', 'SharedArrayBuffer' in window, 'needs COOP/COEP');
+row('crossOriginIsolated', !!window.crossOriginIsolated);
+row('WASM SIMD', (() => { try { return WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11])); } catch { return false; } })());
+row('FileSystem getDirectory (OPFS)', !!navigator.storage?.getDirectory);
+row('showOpenFilePicker', 'showOpenFilePicker' in window);
+
+H('HDR / wide gamut output');
+row('screen HDR (dynamic-range:high)', matchMedia('(dynamic-range: high)').matches, 'needs HDR monitor + OS HDR on');
+row('video-dynamic-range:high', matchMedia('(video-dynamic-range: high)').matches);
+row('color-gamut: p3', matchMedia('(color-gamut: p3)').matches);
+row('color-gamut: rec2020', matchMedia('(color-gamut: rec2020)').matches);
+{
+  let pq = false, hlg = false;
+  try { pq  = !!document.createElement('canvas').getContext('2d', { colorSpace: 'rec2100-pq'  }); } catch {}
+  try { hlg = !!document.createElement('canvas').getContext('2d', { colorSpace: 'rec2100-hlg' }); } catch {}
+  // getContext ignores unknown options silently -> verify it actually took
+  const probe = s => { try { const c = document.createElement('canvas').getContext('2d', { colorSpace: s }); return c?.getContextAttributes?.().colorSpace === s; } catch { return false; } };
+  row('canvas2d colorSpace rec2100-pq',  probe('rec2100-pq'));
+  row('canvas2d colorSpace rec2100-hlg', probe('rec2100-hlg'));
+  row('canvas2d colorSpace display-p3',  probe('display-p3'));
+  void pq; void hlg;
+}
+
+H('WebCodecs config support (async)');
+render();
+
+async function render() {
+  OUT.innerHTML = lines.join('\n');
+  if (!('VideoDecoder' in window)) { OUT.innerHTML = lines.join('\n'); return; }
+  const cfgs = [
+    ['hvc1.2.4.L150.B0', 3840, 2160, 'HEVC Main10 4K'],
+    ['hvc1.2.4.L120.B0', 1920, 1080, 'HEVC Main10 1080p'],
+    ['avc1.640028',      1920, 1080, 'H.264 High (control)'],
+    ['av01.0.08M.10',    1920, 1080, 'AV1 10-bit'],
+  ];
+  for (const [codec, w, h, d] of cfgs) {
+    let s;
+    try {
+      const r = await VideoDecoder.isConfigSupported({ codec, codedWidth: w, codedHeight: h });
+      s = r.supported === true;
+    } catch (e) { s = `ERR`; }
+    row(`${codec.padEnd(18)} ${d}`, s);
+  }
+  const acfgs = [
+    ['mp4a.40.2', 48000, 2, 'AAC-LC'],
+    ['ec-3',      48000, 6, 'E-AC3 5.1'],
+    ['flac',      48000, 2, 'FLAC'],
+    ['opus',      48000, 2, 'Opus (control)'],
+  ];
+  H('AudioDecoder config support');
+  for (const [codec, sr, ch, d] of acfgs) {
+    let s;
+    try {
+      const r = await AudioDecoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: ch });
+      s = r.supported === true;
+    } catch (e) { s = 'ERR'; }
+    row(`${codec.padEnd(18)} ${d}`, s);
+  }
+
+  H('Audio output channels');
+  try {
+    const ac = new AudioContext();
+    row(`destination.maxChannelCount = ${ac.destination.maxChannelCount}`, ac.destination.maxChannelCount > 2, '>2 means real multichannel out');
+    row(`sampleRate = ${ac.sampleRate}`, 'info');
+    ac.close();
+  } catch (e) { row('AudioContext', false, String(e)); }
+
+  lines.push(`\n<h2>UA</h2>${navigator.userAgent}`);
+  OUT.innerHTML = lines.join('\n');
+  document.title = 'PROBE_DONE';
+  fetch('/collect', { method: 'POST', body: OUT.innerText }).catch(() => {});
+}
+</script>

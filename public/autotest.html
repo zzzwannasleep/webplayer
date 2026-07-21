@@ -1,0 +1,253 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>autotest</title>
+<style>body{font:12px/1.5 ui-monospace,Consolas,monospace;background:#111;color:#ddd;padding:12px}
+video{width:420px;background:#000}pre{white-space:pre-wrap}</style>
+<video id="v" muted playsinline></video>
+<pre id="out">running…</pre>
+<script type="module">
+// Headful acceptance test. Headless Chromium has no platform HEVC decoder, so
+// the only meaningful run is in a real window -- results are POSTed back to
+// the dev server for the shell to read.
+import { Player } from '../src/player.js';
+import { Subtitles } from '../src/subs/index.js';
+import { srtToVtt } from '../src/subs/srt.js';
+
+const out = document.getElementById('out');
+const lines = [];
+let failures = 0;
+// Post after every file (and on any error) so a hang or a crash still leaves
+// evidence behind instead of an empty timeout.
+const post = () => fetch('/collect', { method: 'POST', body: out.textContent }).catch(() => {});
+let postTimer = null;
+const say = s => {
+  lines.push(s);
+  out.textContent = lines.join('\n');
+  if (!postTimer) postTimer = setTimeout(() => { postTimer = null; post(); }, 250);
+};
+addEventListener('error', e => { say(`  FATAL ${e.message} @ ${e.filename}:${e.lineno}`); post(); });
+addEventListener('unhandledrejection', e => { say(`  FATAL unhandled rejection: ${e.reason?.message ?? e.reason}`); post(); });
+say('booted');
+post();
+const check = (label, actual, expected) => {
+  const ok = actual === expected;
+  if (!ok) failures++;
+  say(`  ${ok ? 'PASS' : 'FAIL'}  ${label}: ${actual}${ok ? '' : `  (expected ${expected})`}`);
+};
+
+const FILES = [
+  { url: '/mozahngtantexiaoass.mkv', w: 1920, h: 1080, hdr: false, dv: false, fonts: 28, subs: 2, audioOk: true,  audio: 'AAC',   sub: 'ass' },
+  { url: '/qinyinshaonvpgs.mkv',     w: 1920, h: 1080, hdr: false, dv: false, fonts: 0,  subs: 3, audioOk: true,  audio: 'FLAC',  sub: 'pgs' },
+  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs' },
+];
+
+/**
+ * Count non-transparent pixels a renderer actually painted.
+ *
+ * Both renderers draw into a canvas whose control is transferred to a worker,
+ * so getContext('2d') on it throws. Drawing the placeholder canvas into a
+ * scratch canvas is the only way to read what the worker committed -- and it
+ * is the whole point of the test: "no exception was thrown" is not evidence
+ * that a subtitle appeared on screen.
+ */
+function paintedPixels(canvas) {
+  if (!canvas?.width || !canvas?.height) return { ok: false, why: 'no canvas' };
+  const scratch = document.createElement('canvas');
+  const scale = Math.min(1, 640 / canvas.width);
+  scratch.width = Math.max(1, Math.round(canvas.width * scale));
+  scratch.height = Math.max(1, Math.round(canvas.height * scale));
+  const ctx = scratch.getContext('2d', { willReadFrequently: true });
+  try {
+    ctx.drawImage(canvas, 0, 0, scratch.width, scratch.height);
+    const px = ctx.getImageData(0, 0, scratch.width, scratch.height).data;
+    let opaque = 0;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 16) opaque++;
+    return { ok: true, opaque, w: canvas.width, h: canvas.height };
+  } catch (e) {
+    return { ok: false, why: e.message, w: canvas.width, h: canvas.height };
+  }
+}
+
+/** The canvas a renderer created next to the video. */
+const rendererCanvas = video => [...(video.parentNode?.querySelectorAll('canvas') ?? [])].pop();
+
+/** Poll until the renderer has painted something, or give up. */
+async function waitForPaint(video, ms) {
+  const t0 = performance.now();
+  let best = { ok: false, opaque: 0 };
+  while (performance.now() - t0 < ms) {
+    const r = paintedPixels(rendererCanvas(video));
+    if (r.ok && r.opaque > 0) return r;
+    if (r.ok) best = r;
+    else best = r;
+    await new Promise(r2 => setTimeout(r2, 250));
+  }
+  return best;
+}
+
+const waitFor = (cond, ms, label) => new Promise((res, rej) => {
+  const t0 = performance.now();
+  const tick = () => {
+    if (cond()) return res(performance.now() - t0);
+    if (performance.now() - t0 > ms) return rej(new Error(`timeout waiting for ${label}`));
+    requestAnimationFrame(tick);
+  };
+  tick();
+});
+
+const video = document.getElementById('v');
+
+for (const f of FILES) {
+  say(`\n=== ${f.url} ===`);
+  const player = new Player(video);
+  player.log = (m, lvl) => say(`       [${lvl ?? 'info'}] ${m}`);
+  let subs = null;
+  try {
+    const t0 = performance.now();
+    say('  step: HEAD + parseHeader…');
+    const info = await player.load(f.url);
+    say(`  header parsed in ${(performance.now() - t0).toFixed(0)}ms`);
+
+    check('video track playable via MSE', info.video[0]?.supported, true);
+    say(`       mime: ${info.video[0]?.mime}`);
+    check('subtitle track count', info.subtitles.length, f.subs);
+    check('embedded fonts', info.fonts, f.fonts);
+    check('HDR detected', !!info.hdr, f.hdr);
+    check('Dolby Vision detected', !!info.dolbyVision, f.dv);
+    if (info.dolbyVision) {
+      check('DV single layer (playable as HDR10)', info.dolbyVision.playable, true);
+      say(`       DV profile ${info.dolbyVision.profile}`);
+    }
+    check(`${f.audio} audio accepted by MSE`, info.audio[0]?.supported, f.audioOk);
+
+    // --- the real test: does it actually decode and advance? --------------
+    subs = new Subtitles(player, { log: (m, lvl) => say(`       [sub:${lvl ?? 'info'}] ${m}`) });
+    await player.play({ videoIndex: 0, audioIndex: 0 });
+    await waitFor(() => video.readyState >= 2, 25000, 'readyState>=HAVE_CURRENT_DATA');
+    check('videoWidth from decoder', video.videoWidth, f.w);
+    check('videoHeight from decoder', video.videoHeight, f.h);
+
+    await video.play();
+    const startT = video.currentTime;
+    await waitFor(() => video.currentTime > startT + 1.5, 20000, 'playback to advance 1.5s');
+    check('currentTime advanced past 1.5s', video.currentTime > 1.5, true);
+    say(`       playing at t=${video.currentTime.toFixed(2)}s, buffered=${video.buffered.length ? video.buffered.end(0).toFixed(1) : 0}s`);
+
+    // --- seek into the middle and confirm it resumes ----------------------
+    const target = Math.min(info.duration * 0.5, 600);
+    video.currentTime = target;
+    await waitFor(() => video.readyState >= 2 && Math.abs(video.currentTime - target) < 20, 30000, 'seek to complete');
+    const afterSeek = video.currentTime;
+    await waitFor(() => video.currentTime > afterSeek + 0.5, 20000, 'playback after seek');
+    check(`seek to ${target.toFixed(0)}s resumed`, video.currentTime > target - 20, true);
+    say(`       resumed at t=${video.currentTime.toFixed(2)}s`);
+
+    // --- subtitles --------------------------------------------------------
+    // Turned on after the seek on purpose: the PGS tracks in these files have
+    // no packets in the first seconds, so enabling at t=0 would test nothing
+    // until the buffer reached the first subtitle anyway.
+    say(`  step: subtitles (${f.sub})…`);
+    const track = info.subtitles.findIndex(s => s.format === f.sub);
+    check(`found a ${f.sub} track`, track >= 0, true);
+    const started = await subs.select(track);
+    check('renderer started', !!started, true);
+    if (f.sub === 'ass') check('embedded fonts handed to libass', started?.fonts, f.fonts);
+
+    // Packets only arrive as the player reads ahead, so let it play.
+    await waitFor(() => subs.delivered > 0, 30000, 'subtitle packets to reach the renderer')
+      .catch(e => { failures++; say(`  FAIL  ${e.message}`); });
+    say(`       ${subs.delivered} subtitle${f.sub === 'ass' ? ' events' : ' display sets'} delivered`);
+    check('renderer received subtitles', subs.delivered > 0, true);
+
+    // The only claim that matters: did anything get painted?
+    const paint = await waitForPaint(video, 20000);
+    if (paint.ok) {
+      say(`       overlay canvas ${paint.w}x${paint.h}, ${paint.opaque} opaque px sampled`);
+      check('subtitle pixels painted on the overlay', paint.opaque > 0, true);
+    } else {
+      // Not a pass. If the canvas cannot be read back, this test cannot prove
+      // anything about what is on screen, and that must not read as success.
+      failures++;
+      say(`  FAIL  could not read the overlay canvas: ${paint.why}`);
+    }
+
+    video.pause();
+    await subs.destroy();
+    await player.dispose();   // shared <video>: a stale player keeps handling its events
+  } catch (e) {
+    failures++;
+    say(`  FAIL  ${e.message}`);
+    console.error(e);
+    try { await subs?.destroy(); } catch {}
+    try { await player.dispose(); } catch {}
+  }
+  post();
+}
+
+// --- external SRT: no renderer of ours, the browser draws it ---------------
+say('\n=== houshisrt.srt (native <track>) ===');
+try {
+  const srt = await (await fetch('/houshisrt.srt')).text();
+  const vtt = srtToVtt(srt);
+  const cues = (vtt.match(/-->/g) ?? []).length;
+  check('cues converted', cues > 1000, true);
+  say(`       ${cues} cues`);
+
+  const el = document.createElement('track');
+  el.kind = 'subtitles';
+  el.src = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+  video.appendChild(el);
+  el.track.mode = 'showing';
+  await waitFor(() => el.track.cues && el.track.cues.length > 0, 10000, 'the browser to parse the VTT');
+  check('browser parsed the cues', el.track.cues.length, cues);
+  // The browser rejects a malformed cue silently by dropping it, so an exact
+  // match is the check -- not merely "some cues loaded".
+  say(`       first cue "${el.track.cues[0].text.slice(0, 40)}" at ${el.track.cues[0].startTime.toFixed(3)}s`);
+  check('first cue time', el.track.cues[0].startTime.toFixed(3), '4.420');
+  el.remove();
+} catch (e) {
+  failures++;
+  say(`  FAIL  ${e.message}`);
+}
+post();
+
+// --- the player UI boots ---------------------------------------------------
+// Everything above exercises the modules directly. index.html is the glue that
+// wires them to the DOM, and a typo there -- a bad import path, a selector that
+// matches nothing -- throws at module scope and leaves a blank page that no
+// module-level test would notice.
+say('\n=== public/index.html boots ===');
+try {
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:900px;height:500px;border:1px solid #333';
+  const errors = [];
+  const loaded = new Promise(res => { frame.onload = res; });
+  document.body.append(frame);
+  frame.src = '/public/index.html';
+  await loaded;
+  frame.contentWindow.addEventListener('error', e => errors.push(e.message));
+  frame.contentWindow.addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
+
+  // window.player is assigned on the last line of the module, so its presence
+  // means every import resolved and the whole script ran.
+  await waitFor(() => frame.contentWindow.player, 15000, 'index.html module to finish executing');
+  check('the page module executed to completion', !!frame.contentWindow.player, true);
+  const doc = frame.contentDocument;
+  for (const id of ['video', 'playBtn', 'file', 'extSub', 'loadAss', 'meta', 'tracks', 'log']) {
+    check(`#${id} exists`, !!doc.getElementById(id), true);
+  }
+  await new Promise(r => setTimeout(r, 500));
+  check('no errors during boot', errors.length, 0);
+  if (errors.length) say(`       ${errors.join(' | ')}`);
+  frame.remove();
+} catch (e) {
+  failures++;
+  say(`  FAIL  ${e.message}`);
+}
+post();
+
+say(`\n${failures === 0 ? 'ALL BROWSER CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
+say(`UA ${navigator.userAgent}`);
+fetch('/collect', { method: 'POST', body: out.textContent }).catch(() => {});
+document.title = 'DONE';
+</script>

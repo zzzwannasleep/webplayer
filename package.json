@@ -1,0 +1,22 @@
+{
+  "name": "webplayer",
+  "version": "0.1.0",
+  "description": "Browser video player for MKV with HDR / Dolby Vision and soft subtitles. Zero transcoding: Matroska is repackaged into fragmented MP4 and handed to Media Source Extensions.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "serve": "node tools/serve.mjs .",
+    "test": "node tools/test-demux.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-pgs.mjs && node tools/test-srt.mjs"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "jassub": "^2.5.7",
+    "libav.js": "^6.9.8",
+    "libpgs": "^0.8.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}
