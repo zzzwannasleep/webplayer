@@ -88,6 +88,52 @@ function stripFlacHeader(cp) {
   return isMagic ? cp.subarray(4) : cp;
 }
 
+/**
+ * Why an audio track will not play, in terms of what would fix it.
+ *
+ * "unsupported" on its own is useless to anyone reading the UI: it does not
+ * distinguish a codec no browser will ever take from one that merely needs a
+ * decoder wired up, and it hides the fact that a 5.1 track will be downmixed
+ * to stereo regardless of which route it takes.
+ */
+export const AUDIO_NOTES = {
+  A_DTS: {
+    name: 'DTS',
+    reason: 'No browser ships a DTS decoder, and DTS is patent-encumbered.',
+    route: 'Needs a wasm decoder, then re-encoding to Opus for MSE.',
+  },
+  A_TRUEHD: {
+    name: 'Dolby TrueHD',
+    reason: 'Lossless MLP. No browser decodes it; it is a Blu-ray format.',
+    route: 'Needs a wasm decoder. Most discs also carry an AC-3 core track — prefer that if present.',
+  },
+  A_MLP: {
+    name: 'MLP',
+    reason: 'The lossless packing TrueHD is built on. Not decoded by any browser.',
+    route: 'Needs a wasm decoder.',
+  },
+  A_EAC3: {
+    name: 'Dolby Digital Plus (E-AC3)',
+    reason: 'MSE and WebCodecs both reject ec-3 here; support depends on an OS decoder that this platform does not expose.',
+    route: 'Needs a wasm decoder, then re-encoding to Opus for MSE.',
+  },
+  A_AC3: {
+    name: 'Dolby Digital (AC-3)',
+    reason: 'MSE and WebCodecs both reject ac-3 here.',
+    route: 'Needs a wasm decoder, then re-encoding to Opus for MSE.',
+  },
+  A_DTS_HD: { name: 'DTS-HD', reason: 'Extension of DTS; no browser decodes it.', route: 'Needs a wasm decoder.' },
+};
+
+/** What is known about an audio track the player cannot hand to MSE. */
+export function audioNote(track, channels) {
+  const n = AUDIO_NOTES[track.codecId]
+    ?? { name: track.codecId.replace(/^A_/, ''), reason: 'No repackaging path for this codec.', route: 'Unhandled.' };
+  return channels > 2
+    ? { ...n, downmix: `${channels} channels will be downmixed to stereo — WebAudio reports maxChannelCount 2.` }
+    : n;
+}
+
 export const SUBTITLE_CODECS = {
   'S_TEXT/ASS': 'ass', 'S_TEXT/SSA': 'ssa',
   'S_TEXT/UTF8': 'srt', 'S_TEXT/WEBVTT': 'vtt',

@@ -4,7 +4,7 @@
 // in JS, so the browser keeps hardware decode, HDR passthrough, PiP, fullscreen
 // and casting -- all of which a WebCodecs+canvas pipeline throws away.
 import { MatroskaDemuxer, FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE } from './demux/matroska.js';
-import { buildRemuxer, SUBTITLE_CODECS } from './remux/tracks.js';
+import { buildRemuxer, SUBTITLE_CODECS, audioNote } from './remux/tracks.js';
 import { colourFromTrack, isHdr, parseHvcC, scanAccessUnit, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
 
 const BUFFER_AHEAD = 20;          // seconds of media to keep ahead of the playhead
@@ -117,6 +117,7 @@ export class Player {
         const rx = buildRemuxer(t, dx.duration);
         const supported = rx ? MediaSource.isTypeSupported(rx.mime) : false;
         out.audio.push({ track: t, mime: rx?.mime, supported,
+                         note: supported ? null : audioNote(t, t.audio.channels),
                          label: `${t.codecId.replace('A_', '')} ${t.audio.channels}ch ${Math.round(t.audio.sampleRate / 1000)}kHz`
                                 + (t.name ? ` · ${t.name}` : '') + ` [${t.language}]` });
       } else if (t.type === TRACK_SUBTITLE) {

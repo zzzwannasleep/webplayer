@@ -159,3 +159,21 @@ reads the overlay canvas back and counts painted pixels.
 
 The test files referenced by the suites live in the repository root and are not
 committed.
+
+## Test material
+
+    node tools/make-samples.mjs       # writes samples/ (not committed)
+
+DTS, TrueHD, AC-3 and E-AC3 cannot be obtained from any streaming service —
+they are Blu-ray and broadcast formats, and services transcode them away. They
+are synthesised with ffmpeg instead, which is better suited to what these paths
+do: the player identifies these codecs, decides they need a software decoder,
+and reports that. A 20-second generated file exercises that completely and is
+small enough to regenerate on demand. `samples/audio-multi.mkv` carries all
+four in one file, which is also the only multi-audio-track test material here.
+
+Two things are deliberately *not* synthesised, because nothing available can
+produce them honestly: genuine dual-layer Dolby Vision profile 7, and real
+HDR Vivid / CUVA graded content. Their detection paths are therefore
+unverified against real bitstreams — the code is written and the negative case
+is asserted, but no sample has ever exercised the positive case.

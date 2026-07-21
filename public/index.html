@@ -136,7 +136,7 @@ function render() {
 
   $('#tracks').innerHTML =
     sel('videoSel', info.video, x => `${x.label}${x.supported ? '' : '  ✕ unsupported'}`) +
-    sel('audioSel', info.audio, x => `${x.label}${x.supported ? '' : '  ✕ unsupported'}`) +
+    sel('audioSel', info.audio, x => `${x.label}${x.supported ? '' : `  ✕ ${x.note.name} — needs a decoder`}`) +
     (info.subtitles.length
       ? `<select id="subSel"><option value="-1">subtitles: off</option>${
           info.subtitles.map((x, i) => {
@@ -153,7 +153,12 @@ function render() {
     finally { e.target.disabled = false; }
   });
 
-  for (const a of info.audio) if (!a.supported) player.log(`audio ${a.label}: ${a.mime} rejected by MSE`, 'warn');
+  for (const a of info.audio) {
+    if (a.supported) continue;
+    // Say what it is and what it would take, not just "unsupported".
+    player.log(`${a.note.name} cannot play: ${a.note.reason} ${a.note.route}`, 'warn');
+    if (a.note.downmix) player.log(a.note.downmix, 'warn');
+  }
   $('#playBtn').disabled = !info.video.some(v => v.supported);
 }
 
