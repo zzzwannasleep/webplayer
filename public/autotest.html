@@ -38,7 +38,7 @@ const check = (label, actual, expected) => {
 const FILES = [
   { url: '/mozahngtantexiaoass.mkv', w: 1920, h: 1080, hdr: false, dv: false, fonts: 28, subs: 2, audioOk: true,  audio: 'AAC',   sub: 'ass' },
   { url: '/qinyinshaonvpgs.mkv',     w: 1920, h: 1080, hdr: false, dv: false, fonts: 0,  subs: 3, audioOk: true,  audio: 'FLAC',  sub: 'pgs' },
-  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs',
+  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs', transcoded: true,
     hdr10plus: true, peakNits: 1000, maxCLL: 329, maxFALL: 142 },
 ];
 
@@ -131,6 +131,7 @@ for (const f of FILES) {
       say(`       DV profile ${info.dolbyVision.profile}`);
     }
     check(`${f.audio} audio accepted by MSE`, info.audio[0]?.supported, f.audioOk);
+    if (f.transcoded) say('  (E-AC3 will be decoded in wasm and re-encoded to Opus)');
 
     // --- the real test: does it actually decode and advance? --------------
     subs = new Subtitles(player, { log: (m, lvl) => say(`       [sub:${lvl ?? 'info'}] ${m}`) });
@@ -153,6 +154,19 @@ for (const f of FILES) {
     await waitFor(() => video.currentTime > afterSeek + 0.5, 20000, 'playback after seek');
     check(`seek to ${target.toFixed(0)}s resumed`, video.currentTime > target - 20, true);
     say(`       resumed at t=${video.currentTime.toFixed(2)}s`);
+
+    // Software-decoded audio: the only claim worth checking is that real audio
+    // data reached a SourceBuffer, not that no exception was thrown.
+    if (f.transcoded) {
+      await waitFor(() => player.transcoder?.encodedChunks > 0, 90000,
+                    'wasm decode + Opus encode to produce chunks')
+        .catch(e => { failures++; say(`  FAIL  ${e.message}`); });
+      check('transcoder produced Opus chunks', player.transcoder?.encodedChunks > 0, true);
+      const ab = player.transcoder?.sb?.buffered;
+      const secs = ab?.length ? ab.end(ab.length - 1) - ab.start(0) : 0;
+      say(`       ${player.transcoder?.encodedChunks} Opus chunks, ${secs.toFixed(1)}s buffered`);
+      check('transcoded audio reached the SourceBuffer', secs > 1, true);
+    }
 
     // --- subtitles --------------------------------------------------------
     // Turned on after the seek on purpose: the PGS tracks in these files have

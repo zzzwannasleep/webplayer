@@ -7,6 +7,8 @@ import { MatroskaDemuxer, FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRAC
 import { buildRemuxer, SUBTITLE_CODECS, audioNote } from './remux/tracks.js';
 import { colourFromTrack, isHdr, parseHvcC, scanAccessUnit, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
 import { parseVp9Keyframe } from './demux/vp9.js';
+import { SoftwareAudioDecoder, RAW_FORMATS } from './audio/decode.js';
+import { AudioTranscoder, describeError } from './audio/transcode.js';
 
 const BUFFER_AHEAD = 20;          // seconds of media to keep ahead of the playhead
 const KEEP_BEHIND = 12;           // seconds retained behind it before eviction
@@ -78,6 +80,10 @@ export class Player {
     this._subs = new Map();   // track number -> { track, onPacket }
     /** Called with (packet, track) for every packet of an enabled subtitle track. */
     this.onSubtitlePacket = null;
+    this.transcoder = null;       // software-decoded audio, when MSE refuses the codec
+    this.audioDecoder = null;
+    /** Set to false to keep the 31 MB wasm decoder from ever loading. */
+    this.softwareAudio = true;
     this.info = null;
     this.log = () => {};
     this._readPos = 0;
@@ -187,6 +193,35 @@ export class Player {
     return out;
   }
 
+  /**
+   * Attach a SourceBuffer fed by wasm decode + Opus re-encode.
+   *
+   * Loading the decoder is deferred to here so a file whose audio the browser
+   * can already play never downloads 31 MB of wasm.
+   */
+  async _startTranscode(track, ms) {
+    if (!window.AudioEncoder) throw new Error('no AudioEncoder in this browser');
+    this.audioDecoder ??= new SoftwareAudioDecoder({ log: (m, l) => this.log(m, l) });
+
+    let queue = null;
+    const tc = new AudioTranscoder(track, this.audioDecoder, this.demuxer.duration, {
+      log: (m, l) => this.log(m, l),
+      onFragment: (frag) => queue?.push(frag),
+    });
+    if (!MediaSource.isTypeSupported(tc.mime)) throw new Error(`${tc.mime} rejected by MSE`);
+
+    const sb = ms.addSourceBuffer(tc.mime);
+    sb.mode = 'segments';
+    queue = new BufferQueue(sb, this.video, ms, (msg, lvl) => this.log(`transcoded audio: ${msg}`, lvl));
+    queue.push(tc.initSegment());
+
+    tc.sourceTrack = track.number;
+    tc.queue = queue;
+    tc.sb = sb;
+    this.transcoder = tc;
+    this.log(`software audio: ${track.codecId} -> ${tc.mime}`);
+  }
+
   /** Read profile and bit depth out of the first VP9 keyframe. */
   async _probeVp9(track) {
     let n = 0;
@@ -207,17 +242,21 @@ export class Player {
     await this._teardown();
 
     const chosen = [];
+    let transcodeTrack = null;
     const v = this.info.video[videoIndex];
     if (v?.supported) chosen.push(v.track);
     else if (v) this.log(`video track unplayable via MSE (${v.mime}) — no repackaging path`, 'error');
 
     const a = this.info.audio[audioIndex];
     if (a?.supported) chosen.push(a.track);
-    else if (a) {
-      // E-AC3 lands here on Chromium: MSE and WebCodecs both refuse it, so the
-      // only route is a software decoder feeding WebAudio. Not wired up yet —
-      // play video rather than failing the whole file.
-      this.log(`audio "${a.label}" not supported by MSE (${a.mime}) — playing without audio`, 'warn');
+    else if (a && RAW_FORMATS[a.track.codecId] && this.softwareAudio !== false) {
+      // MSE and WebCodecs both refuse this codec, so it is decoded in wasm and
+      // re-encoded to Opus. That keeps it in a SourceBuffer, which keeps the
+      // <video> element as the clock -- the alternative, WebAudio synced by
+      // hand against currentTime, has to reimplement seek, pause and drift.
+      transcodeTrack = a.track;
+    } else if (a) {
+      this.log(`audio "${a.label}" needs a software decoder that is unavailable — playing without audio`, 'warn');
     }
     if (!chosen.length) throw new Error('nothing playable in this file');
 
@@ -240,6 +279,16 @@ export class Player {
       queue.push(remuxer.initSegment());
       this.streams.push({ track, remuxer, sb, queue });
       this.log(`SourceBuffer ${remuxer.mime}`);
+    }
+
+    // The transcoded stream never goes through the demux-to-remux path, so it
+    // gets its own SourceBuffer and the fill loop routes its packets to it.
+    if (transcodeTrack) {
+      try { await this._startTranscode(transcodeTrack, ms); }
+      catch (e) {
+        this.log(`software audio unavailable (${describeError(e)}) — playing without audio`, 'warn');
+        this.transcoder = null;
+      }
     }
 
     this._readPos = await dx.seekTo(0, chosen[0].number);
@@ -307,6 +356,13 @@ export class Player {
       s.queue.backlog = 0;
       s.remuxer.pending.length = 0;
     }
+    if (this.transcoder) {
+      // The decode queue holds windows for the old position; keeping them
+      // would append audio for a timeline the video has already left.
+      this.transcoder.reset();
+      this.transcoder.queue.q.length = 0;
+      this.transcoder.queue.backlog = 0;
+    }
     this.log(`seek ${seconds.toFixed(1)}s -> byte ${this._readPos}`);
 
     // Drop what was buffered around the old position. Without this a long seek
@@ -357,6 +413,7 @@ export class Player {
           if (gen !== this._generation) return;
           const s = wanted.get(block.track);
           if (s) s.remuxer.push(block);
+          else if (block.track === this.transcoder?.sourceTrack) this.transcoder.push(block);
           else this._emitSubtitle(block);
           got++;
         }
@@ -372,11 +429,15 @@ export class Player {
           const frag = s.remuxer.flush();
           if (frag) s.queue.push(frag);
         }
+        // Transcoding is async and lags the read by a window, so fragments are
+        // emitted whenever the encoder has produced any rather than in step
+        // with the demuxer.
+        this.transcoder?.emitPending();
 
         // Only genuine end-of-source ends the stream. A parse failure is not
         // EOF -- ending there truncates playback.
         if (state.parseError) { this.log(`demux stopped: ${state.parseError}`, 'warn'); break; }
-        if (state.atEnd) { this._eof = true; this._maybeEnd('reached end of segment'); break; }
+        if (state.atEnd) { this._eof = true; this.transcoder?.flush(); this._maybeEnd('reached end of segment'); break; }
         if (!got) { this.log(`no blocks at byte ${this._readPos}; stopping fill`, 'warn'); break; }
         await new Promise(r => setTimeout(r, 0));
       }
@@ -395,7 +456,8 @@ export class Player {
   }
 
   _maybeEnd(why) {
-    if (this.mediaSource?.readyState === 'open' && this.streams.every(s => s.queue.idle)) {
+    const audioBusy = this.transcoder && (!this.transcoder.queue.idle || this.transcoder._busy || this.transcoder._queue.length);
+    if (this.mediaSource?.readyState === 'open' && !audioBusy && this.streams.every(s => s.queue.idle)) {
       this.log(`endOfStream() <- ${why}`, 'warn');
       try { this.mediaSource.endOfStream(); } catch {}
     }
@@ -415,6 +477,7 @@ export class Player {
     this.video.removeEventListener('waiting', this._onTick);
     this.video.removeEventListener('seeked', this._onTick);
     this.streams = [];
+    if (this.transcoder) { await this.transcoder.destroy().catch(() => {}); this.transcoder = null; }
     if (this.mediaSource?.readyState === 'open') {
       this.log('endOfStream() <- teardown', 'warn');
       try { this.mediaSource.endOfStream(); } catch {}
