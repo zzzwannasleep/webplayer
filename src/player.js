@@ -143,7 +143,7 @@ export class Player {
     if (v?.codecId === 'V_MPEGH/ISO/HEVC') {
       const lenSize = (parseHvcC(v.codecPrivate)?.lengthSizeMinusOne ?? 3) + 1;
       let rpu = false, el = false, n = 0;
-      for await (const b of dx.readBlocks(dx.seekPosition(0, v.number), 2 << 20)) {
+      for await (const b of dx.readBlocks(await dx.seekTo(0, v.number), 2 << 20)) {
         if (b.track !== v.number) continue;
         const r = scanAccessUnit(b.data, lenSize);
         rpu ||= r.rpu; el ||= r.el;
@@ -190,7 +190,7 @@ export class Player {
   /** Read profile and bit depth out of the first VP9 keyframe. */
   async _probeVp9(track) {
     let n = 0;
-    for await (const b of this.demuxer.readBlocks(this.demuxer.seekPosition(0, track.number), 2 << 20)) {
+    for await (const b of this.demuxer.readBlocks(await this.demuxer.seekTo(0, track.number), 2 << 20)) {
       if (b.track !== track.number) continue;
       const cfg = parseVp9Keyframe(b.data);
       if (cfg) return cfg;
@@ -242,7 +242,7 @@ export class Player {
       this.log(`SourceBuffer ${remuxer.mime}`);
     }
 
-    this._readPos = dx.seekPosition(0, chosen[0].number);
+    this._readPos = await dx.seekTo(0, chosen[0].number);
     this._eof = false;
     this._alive = true;
     this.video.addEventListener('seeking', this._onSeek);
@@ -299,7 +299,7 @@ export class Player {
       if (seconds >= buffered.start(i) && seconds < buffered.end(i) - 0.5) return;
     }
     this._generation++;
-    this._readPos = dx.seekPosition(seconds, primary.number);
+    this._readPos = await dx.seekTo(seconds, primary.number);
     this._eof = false;
     for (const s of this.streams) {
       try { if (s.sb.updating) s.sb.abort(); } catch {}
@@ -460,7 +460,7 @@ export class Player {
     const ahead = this._bufferedAhead();
     if (ahead <= 0) return;
     const gen = this._generation;
-    let pos = this.demuxer.seekPosition(from, entry.track.number);
+    let pos = await this.demuxer.seekTo(from, entry.track.number);
     const until = from + ahead + 2;
     let emitted = 0, budget = 24;   // clusters, so a long buffer cannot run away
 

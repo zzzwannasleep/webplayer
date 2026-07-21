@@ -134,14 +134,33 @@ console.log('\n=== awkward containers ===');
   const dx = await new MatroskaDemuxer(src).parseHeader();
   console.log(`  no-cues.mkv: ${dx.cues.length} cue point(s), duration ${dx.duration.toFixed(2)}s`);
   check('the file really has no Cues', dx.cues.length, 0);
-  // seekPosition must still return something usable. Landing at the first
-  // cluster is correct behaviour; returning NaN or a position past EOF is not.
-  const pos = dx.seekPosition(20, dx.tracks[0].number);
-  check('seekPosition returns a valid offset without an index', Number.isFinite(pos) && pos >= 0 && pos < src.size, true);
-  let got = 0;
-  for await (const b of dx.readBlocks(pos, 4 << 20)) { if (b.track === dx.tracks[0].number) got++; }
-  check('blocks still readable from that offset', got > 0, true);
-  console.log(`        seek(20s) -> byte ${pos}, ${got} blocks readable`);
+  // Without an index the only way to find a position is to look at the
+  // clusters. The old Cues-only path returned the start of the file for every
+  // target, so seeking appeared to work and did nothing.
+  const start = dx.firstCluster ?? dx.segmentStart;
+  const pos = await dx.seekTo(20, dx.tracks[0].number);
+  check('seek lands past the start of the file', pos > start, true);
+  check('seek offset is inside the file', Number.isFinite(pos) && pos < src.size, true);
+
+  // The landing cluster's own timestamp is the check that matters: it must be
+  // at or before the target (never past it, or the frames asked for are gone)
+  // and close to it, or the search found a cluster but not the right one.
+  let firstTime = null, got = 0;
+  for await (const b of dx.readBlocks(pos, 4 << 20)) {
+    if (b.track !== dx.tracks[0].number) continue;
+    firstTime ??= b.time;
+    got++;
+  }
+  check('blocks readable from that offset', got > 0, true);
+  check('lands at or before the requested time', firstTime !== null && firstTime <= 20.001, true);
+  check('lands within 5s of the target', firstTime !== null && firstTime > 15, true);
+  console.log(`        seek(20s) -> byte ${pos}, first block t=${firstTime?.toFixed(3)}s, ${got} blocks`);
+
+  // A second seek must reuse what the first discovered rather than re-scan.
+  const before = dx.cues.length;
+  await dx.seekTo(10, dx.tracks[0].number);
+  check('the search built an index as it went', before > 0, true);
+  console.log(`        discovered ${dx.cues.length} cluster position(s)`);
   src.close();
 }
 {

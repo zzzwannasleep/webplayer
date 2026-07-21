@@ -22,6 +22,7 @@ const ID = {
   CueTrack: 0xf7, CueClusterPosition: 0xf1, CueRelativePosition: 0xf0,
   Cluster: 0x1f43b675, Timestamp: 0xe7, SimpleBlock: 0xa3,
   BlockGroup: 0xa0, Block: 0xa1, BlockDuration: 0x9b, ReferenceBlock: 0xfb,
+  CRC32: 0xbf, Void: 0xec,
   ContentEncodings: 0x6d80, ContentEncoding: 0x6240, ContentEncodingScope: 0x5032,
   ContentEncodingType: 0x5033, ContentCompression: 0x5034,
   ContentCompAlgo: 0x4254, ContentCompSettings: 0x4255, ContentEncryption: 0x5035,
@@ -382,6 +383,100 @@ export class MatroskaDemuxer {
   }
 
   /** Byte offset of the cluster to start at for a given time (seconds). */
+  /**
+   * Byte offset to start reading from for a given time, index or no index.
+   *
+   * With Cues this is a lookup. Without them -- which is every file still being
+   * written, and anything muxed for streaming -- the only way to find a
+   * position is to look at the clusters themselves. Falling back to the start
+   * of the file, which is what the Cues-only path does, means seeking silently
+   * does nothing on those files.
+   *
+   * Discovered clusters are added to `this.cues`, so a file with no index
+   * builds one as it is used and later seeks get cheaper.
+   */
+  async seekTo(seconds, trackNumber) {
+    if (this.cues.length) return this.seekPosition(seconds, trackNumber);
+    if (seconds <= 0) return this.firstCluster ?? this.segmentStart;
+
+    let lo = this.firstCluster ?? this.segmentStart;
+    let hi = Math.min(this.segmentEnd, this.src.size);
+    let best = lo;
+
+    // Bounded: each probe halves the range, so ~40 covers any file size, and
+    // the cap stops a pathological file from turning a seek into a full scan.
+    for (let probe = 0; probe < 40 && hi - lo > (1 << 16); probe++) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      const found = await this._clusterAtOrAfter(mid, Math.min(hi, mid + (8 << 20)));
+      if (!found) { hi = mid; continue; }
+      this._rememberCue(found);
+      if (found.time <= seconds) { best = found.pos; lo = found.pos + 1; }
+      else { hi = found.pos; }
+    }
+
+    // The binary search lands near the target but the last cluster whose time
+    // is <= the target may be just behind `lo`; walk forward from `best` only
+    // if nothing was ever found, so the caller never gets a position past the
+    // requested time.
+    if (best === (this.firstCluster ?? this.segmentStart)) {
+      const first = await this._clusterAtOrAfter(best, best + (8 << 20));
+      if (first) this._rememberCue(first);
+    }
+    return best;
+  }
+
+  _rememberCue(c) {
+    if (this.cues.some(x => x.pos === c.pos)) return;
+    this.cues.push({ time: c.time, pos: c.pos, track: 0, discovered: true });
+    this.cues.sort((a, b) => a.pos - b.pos);
+  }
+
+  /**
+   * First real Cluster at or after `from`, with its timestamp.
+   *
+   * The 4-byte Cluster ID occurs by chance inside compressed video often
+   * enough that finding the bytes is not enough: a match is only accepted if
+   * it is followed by a plausible size and a Timestamp element, which is what
+   * a real cluster always begins with.
+   */
+  async _clusterAtOrAfter(from, until) {
+    const CHUNK = 1 << 20;
+    for (let pos = from; pos < until; pos += CHUNK - 16) {
+      const buf = await this.src.read(pos, Math.min(CHUNK, until - pos + 16));
+      if (buf.length < 16) return null;
+      for (let i = 0; i + 16 <= buf.length; i++) {
+        if (buf[i] !== 0x1f || buf[i + 1] !== 0x43 || buf[i + 2] !== 0xb6 || buf[i + 3] !== 0x75) continue;
+        const r = new Reader(buf.subarray(i), pos + i);
+        readId(r);
+        const size = readSize(r);
+        if (size === undefined) continue;
+        // A cluster begins with its Timestamp -- but not necessarily as the
+        // very first child. ffmpeg and mkvmerge both put an optional CRC-32
+        // ahead of it, and Void padding can appear too. Requiring Timestamp
+        // first rejects every real cluster those muxers write.
+        const cr = new Reader(buf.subarray(i + r.pos), 0);
+        let ticks = null;
+        for (let child = 0; child < 4 && cr.left > 2; child++) {
+          const cid = readId(cr);
+          if (cid === null) break;
+          const csize = readSize(cr);
+          if (csize === undefined || csize === null) break;
+          if (cid === ID.Timestamp) {
+            if (csize < 1 || csize > 8 || csize > cr.left) break;
+            ticks = readUint(cr.bytes(csize));
+            break;
+          }
+          if (cid !== ID.CRC32 && cid !== ID.Void) break;   // anything else: not a cluster head
+          if (csize > cr.left) break;
+          cr.skip(csize);
+        }
+        if (ticks === null) continue;
+        return { pos: pos + i, time: ticks * this.timestampScale / 1e9 };
+      }
+    }
+    return null;
+  }
+
   seekPosition(seconds, trackNumber) {
     const relevant = this.cues.filter(c => !trackNumber || c.track === trackNumber);
     const list = relevant.length ? relevant : this.cues;
