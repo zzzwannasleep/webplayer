@@ -324,16 +324,21 @@ try {
     check(`vendor/${f} reachable from the page`, r?.ok === true, true);
   }
 
-  await waitFor(() => d.querySelectorAll('#samples button').length > 0, 15000, 'sample buttons');
-  const btn = [...d.querySelectorAll('#samples button')].find(b => /ASS/.test(b.textContent));
-  check('ASS sample button present', !!btn, true);
-  btn.click();
-  await waitFor(() => d.getElementById('subSel'), 30000, 'tracks to appear after load');
-  check('subtitle selector rendered', !!d.getElementById('subSel'), true);
-  check('audio selector rendered', !!d.getElementById('audioSel'), true);
-  check('video selector rendered', !!d.getElementById('videoSel'), true);
+  // Load the way a person does now that the sample shortcuts are gone: paste a
+  // URL and press the button.
+  const urlBox = d.getElementById('url');
+  check('URL box present in the header', !!urlBox, true);
+  urlBox.value = '/mozahngtantexiaoass.mkv';
+  d.getElementById('loadUrl').click();
+  await waitFor(() => d.getElementById('subSel'), 40000, 'tracks to appear after load');
+  // A picker only appears where there is a real choice: this file has two
+  // subtitle tracks but one video and one audio track, and a dropdown that
+  // cannot be changed is noise in a control bar.
+  check('subtitle picker shown (2 tracks)', !!d.getElementById('subSel'), true);
+  check('single-choice audio picker hidden', !!d.getElementById('audioSel'), false);
+  check('single-choice video picker hidden', !!d.getElementById('videoSel'), false);
 
-  d.getElementById('playBtn').click();
+  // Loading now starts playback on its own; there is no button outside the frame.
   const fv = d.getElementById('video');
   await waitFor(() => fv.readyState >= 2, 40000, 'the UI to decode a frame');
   check('decoder produced a picture', fv.videoWidth > 0, true);
@@ -394,13 +399,19 @@ try {
     say(`  FAIL  overlay unreadable: ${paint.why}`);
   }
 
-  // Pressing play again must not silently switch the subtitle back off.
-  d.getElementById('playBtn').click();
-  await waitFor(() => fv.readyState >= 2, 40000, 'replay');
-  await new Promise(r => setTimeout(r, 2000));
-  check('the chosen subtitle survives pressing play', sel.value, opt.value);
-  const paint2 = await waitForPaint(fv, 45000);
-  check('still painting after replay', paint2.ok && paint2.opaque > 0, true);
+  // Switching to the other subtitle track and back must keep drawing: each
+  // switch tears one renderer down and builds another on a live MediaSource.
+  const other = [...sel.options].find(o => !o.disabled && o.value !== '-1' && o.value !== opt.value);
+  if (other) {
+    sel.value = other.value;
+    sel.dispatchEvent(new w.Event('change'));
+    const paint2 = await waitForPaint(fv, 45000);
+    check('second subtitle track also paints', paint2.ok && paint2.opaque > 0, true);
+    sel.value = '-1';
+    sel.dispatchEvent(new w.Event('change'));
+    await new Promise(r => setTimeout(r, 1200));
+    check('turning subtitles off is honoured', sel.value, '-1');
+  }
 
   check('no errors while driving the UI', errors.length, 0);
   if (errors.length) say(`       ${errors.join(' | ')}`);

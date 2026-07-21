@@ -43,7 +43,6 @@
   .btn.ghost:hover { color:var(--fg); }
 
   /* ---------- open panel ---------- */
-  .open-row { display:flex; gap:8px; align-items:stretch; flex-wrap:wrap; }
   .url-wrap { display:flex; flex:1; min-width:260px; }
   .url-wrap input {
     flex:1; min-width:0; background:#0c1014; border:1px solid var(--line);
@@ -164,11 +163,6 @@
   #stage:fullscreen video { object-fit:contain; }
 
   /* ---------- control bar under the video ---------- */
-  .bar {
-    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-    margin-top:10px; padding:10px 12px;
-    background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
-  }
   .picks { display:flex; gap:8px; flex:1; flex-wrap:wrap; min-width:0; }
   .pick { display:flex; align-items:center; gap:7px; min-width:0; flex:1 1 190px; }
   .pick > span {
@@ -196,7 +190,11 @@
     webplayer <small>MKV · HDR · DV · ASS/PGS</small>
   </div>
   <div class="spacer"></div>
-  <button class="btn" id="pickFile">打开本地文件…</button>
+  <div class="url-wrap">
+    <input id="url" type="url" spellcheck="false" placeholder="粘贴视频直链，或把文件拖进来">
+    <button class="btn" id="loadUrl">打开</button>
+  </div>
+  <button class="btn" id="pickFile">本地文件…</button>
   <button class="btn ghost" id="pickSub">外挂字幕…</button>
   <input type="file" id="file" accept=".mkv,.webm,.mp4,.m4v" hidden>
   <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa" hidden>
@@ -217,6 +215,7 @@
         <span class="vtime" id="tEnd">0:00</span>
         <button class="vbtn" id="muteBtn" aria-label="静音">🔊</button>
         <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
+        <div class="picks" id="picks"></div>
         <button class="vbtn" id="fsBtn" aria-label="全屏">⛶</button>
       </div>
       <div class="placeholder" id="placeholder">
@@ -228,21 +227,7 @@
       </div>
     </div>
 
-    <div class="bar" id="bar">
-      <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
-      <div class="picks" id="picks"><span class="empty">载入文件后可选择轨道</span></div>
-    </div>
 
-    <div class="card" style="margin-top:12px">
-      <div class="open-row">
-        <div class="url-wrap">
-          <input id="url" type="url" spellcheck="false"
-                 placeholder="https://example.com/video.mkv — 需服务器支持 Range 与 CORS">
-          <button class="btn" id="loadUrl">打开链接</button>
-        </div>
-      </div>
-      <div id="samples" style="margin-top:9px;display:flex;gap:6px;flex-wrap:wrap"></div>
-    </div>
   </div>
 
   <aside>
@@ -292,7 +277,6 @@ const fmtTime = s => {
 let info = null;
 
 async function load(input) {
-  $('#playBtn').disabled = true;
   $('#meta').textContent = '读取中…';
   try {
     await subs.destroy();
@@ -351,9 +335,11 @@ function render() {
     ${info.dynamicHdr ? `<div class="note">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
     ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
 
-  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
-    ? `<label class="pick"><span>${label}</span><select id="${id}">${
-        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></label>`
+  // In the control bar there is no room for labels, so the accessible name and
+  // the tooltip carry what the row used to say.
+  const field = (label, id, items, fmt, extraFirst) => items.length > (extraFirst ? 0 : 1) || extraFirst
+    ? `<select id="${id}" aria-label="${label}" title="${label}">${
+        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select>`
     : '';
 
   $('#picks').innerHTML =
@@ -374,7 +360,9 @@ function render() {
     player.log(`${a.note.name}: ${a.note.reason} ${a.note.route}`, 'warn');
     if (a.note.downmix) player.log(a.note.downmix, 'warn');
   }
-  $('#playBtn').disabled = !info.video.some(v => v.supported);
+  // Nothing outside the frame to press: loading a file starts it.
+  if (info.video.some(v => v.supported)) start();
+  else player.log('没有可播放的视频轨', 'error');
 }
 
 /**
@@ -402,28 +390,29 @@ async function applySubtitle(idx) {
   }
 }
 
-$('#playBtn').addEventListener('click', async () => {
-  $('#playBtn').disabled = true;
+async function start() {
   try {
-    // A new play() rebuilds the MediaSource and restarts reading, so a
-    // renderer from the previous run holds events for a timeline that is gone.
-    // The CHOICE survives, though: tearing the renderer down and leaving the
-    // dropdown showing a subtitle nobody is drawing is how this looked broken.
+    // A new play() rebuilds the MediaSource, so a renderer from the previous
+    // run holds events for a timeline that is gone. The CHOICE survives.
     const wanted = Number($('#subSel')?.value ?? -1);
     await subs.destroy();
     await player.play({
       videoIndex: Number($('#videoSel')?.value ?? 0),
       audioIndex: Number($('#audioSel')?.value ?? 0),
     });
-    await video.play().catch(e => player.log(`自动播放被拦截: ${e.message}`, 'warn'));
+    await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
     if (wanted >= 0) await applySubtitle(wanted);
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);
-  } finally {
-    $('#playBtn').disabled = false;
   }
-});
+}
+
+// Changing the video or audio track has to restart the MediaSource; there is
+// no apply button to press, so the change itself is the instruction.
+for (const id of ['#videoSel', '#audioSel']) {
+  document.addEventListener('change', e => { if (e.target.matches(id)) start(); });
+}
 
 // ---- opening things ------------------------------------------------------
 $('#pickFile').addEventListener('click', () => $('#file').click());
@@ -476,26 +465,6 @@ async function loadSubtitleFile(file) {
 }
 $('#extSub').addEventListener('change', e => { if (e.target.files[0]) loadSubtitleFile(e.target.files[0]); });
 
-// Sample shortcuts, but only the ones this server is actually serving.
-const SAMPLES = [
-  { url: '/houshi.mkv', label: '4K DV + HDR10+' },
-  { url: '/mozahngtantexiaoass.mkv', label: 'ASS 特效' },
-  { url: '/qinyinshaonvpgs.mkv', label: 'PGS 字幕' },
-  { url: '/samples/audio-multi.mkv', label: 'DTS/TrueHD/AC3' },
-];
-for (const s of SAMPLES) {
-  // A HEAD that fails means the file is not there; showing a button that
-  // cannot work is worse than showing nothing.
-  fetch(s.url, { method: 'HEAD' }).then(r => {
-    if (!r.ok) return;
-    const b = document.createElement('button');
-    b.className = 'btn ghost';
-    b.style.fontSize = '12px';
-    b.textContent = s.label;
-    b.addEventListener('click', () => load(s.url));
-    $('#samples').append(b);
-  }).catch(() => {});
-}
 
 // ---- in-frame video controls -------------------------------------------
 // Written out because the native ones are gone. Fullscreen and keyboard are
