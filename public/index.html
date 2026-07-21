@@ -121,6 +121,21 @@
   #log .error { color:var(--err); } #log .warn { color:var(--warn); }
   #log time { color:var(--faint); margin-right:6px; }
 
+  /* ---------- control bar under the video ---------- */
+  .bar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-top:10px; padding:10px 12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+  }
+  .picks { display:flex; gap:8px; flex:1; flex-wrap:wrap; min-width:0; }
+  .pick { display:flex; align-items:center; gap:7px; min-width:0; flex:1 1 190px; }
+  .pick > span {
+    font-size:11px; color:var(--faint); letter-spacing:.02em;
+    white-space:nowrap; flex-shrink:0;
+  }
+  .pick select { margin:0; padding:6px 8px; font-size:13px; }
+  .pick.off select { color:var(--faint); }
+
   /* ---------- drag & drop ---------- */
   #drop {
     position:fixed; inset:0; z-index:50; display:none;
@@ -158,6 +173,11 @@
       </div>
     </div>
 
+    <div class="bar" id="bar">
+      <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
+      <div class="picks" id="picks"><span class="empty">载入文件后可选择轨道</span></div>
+    </div>
+
     <div class="card" style="margin-top:12px">
       <div class="open-row">
         <div class="url-wrap">
@@ -165,7 +185,6 @@
                  placeholder="https://example.com/video.mkv — 需服务器支持 Range 与 CORS">
           <button class="btn" id="loadUrl">打开链接</button>
         </div>
-        <button class="btn primary" id="playBtn" disabled>播放</button>
       </div>
       <div id="samples" style="margin-top:9px;display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
@@ -175,10 +194,6 @@
     <div class="card">
       <h2>来源</h2>
       <div id="meta" class="empty">尚未载入</div>
-    </div>
-    <div class="card">
-      <h2>轨道</h2>
-      <div id="tracks" class="empty">—</div>
     </div>
     <details class="card log" id="logCard">
       <summary>日志</summary>
@@ -282,11 +297,11 @@ function render() {
     ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
 
   const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
-    ? `<div class="field"><label>${label}</label><select id="${id}">${
-        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
-    : `<div class="field"><label>${label}</label><div class="empty">无</div></div>`;
+    ? `<label class="pick"><span>${label}</span><select id="${id}">${
+        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></label>`
+    : '';
 
-  $('#tracks').innerHTML =
+  $('#picks').innerHTML =
     field('视频', 'videoSel', info.video,
       (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
     field('音频', 'audioSel', info.audio,
@@ -297,13 +312,7 @@ function render() {
         return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : ' ✕ 无渲染器'}</option>`;
       }, '<option value="-1">关闭</option>');
 
-  $('#subSel')?.addEventListener('change', async e => {
-    const idx = Number(e.target.value);
-    e.target.disabled = true;
-    try { await subs.select(idx); }
-    catch (err) { player.log(`字幕: ${err.message}`, 'error'); console.error(err); }
-    finally { e.target.disabled = false; }
-  });
+  $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
 
   for (const a of info.audio) {
     if (a.supported) continue;
@@ -313,18 +322,46 @@ function render() {
   $('#playBtn').disabled = !info.video.some(v => v.supported);
 }
 
+/**
+ * Turn a subtitle track on. Shared by the dropdown and by play(), so the two
+ * can never drift apart -- and so a failure is reported instead of leaving the
+ * dropdown pointing at a track that is not being drawn.
+ */
+async function applySubtitle(idx) {
+  const sel = $('#subSel');
+  if (sel) { sel.disabled = true; sel.value = String(idx); }
+  try {
+    const started = await subs.select(idx);
+    if (idx >= 0 && !started) {
+      player.log('该字幕格式没有渲染器，未开启', 'warn');
+      if (sel) sel.value = '-1';
+    } else if (idx >= 0) {
+      player.log(`字幕已开启: ${info.subtitles[idx].label}`);
+    }
+  } catch (err) {
+    player.log(`字幕开启失败: ${err.message}`, 'error');
+    console.error(err);
+    if (sel) sel.value = '-1';
+  } finally {
+    if (sel) sel.disabled = false;
+  }
+}
+
 $('#playBtn').addEventListener('click', async () => {
   $('#playBtn').disabled = true;
   try {
-    // A new play() rebuilds the MediaSource and restarts reading, so any
+    // A new play() rebuilds the MediaSource and restarts reading, so a
     // renderer from the previous run holds events for a timeline that is gone.
+    // The CHOICE survives, though: tearing the renderer down and leaving the
+    // dropdown showing a subtitle nobody is drawing is how this looked broken.
+    const wanted = Number($('#subSel')?.value ?? -1);
     await subs.destroy();
-    if ($('#subSel')) $('#subSel').value = '-1';
     await player.play({
       videoIndex: Number($('#videoSel')?.value ?? 0),
       audioIndex: Number($('#audioSel')?.value ?? 0),
     });
     await video.play().catch(e => player.log(`自动播放被拦截: ${e.message}`, 'warn'));
+    if (wanted >= 0) await applySubtitle(wanted);
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);

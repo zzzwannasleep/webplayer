@@ -37,11 +37,13 @@ createServer((req, res) => {
     return;
   }
 
-  // normalize() collapses ../ so a crafted path cannot escape ROOT
-  // '/' is the player, not a directory listing: there is nothing else here a
-  // visitor could want, and returning 404 for the address printed at startup
-  // is a good way to make a working server look broken.
-  let path = join(ROOT, normalize(url === '/' ? '/public/index.html' : url));
+  // '/' REDIRECTS to the player rather than serving it in place. Serving
+  // index.html at '/' makes document.baseURI '/', and the subtitle renderers
+  // resolve their wasm bundles against it -- so every one of them 404s and
+  // subtitles silently never appear. The page must load from the directory it
+  // actually lives in.
+  if (url === '/' || url === '/public') { res.writeHead(302, { Location: '/public/' }).end(); return; }
+  let path = join(ROOT, normalize(url));
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
 
   let st;

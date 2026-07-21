@@ -293,33 +293,76 @@ for (const s of CODEC_SAMPLES) {
 }
 post();
 
-// --- the player UI boots ---------------------------------------------------
-// Everything above exercises the modules directly. index.html is the glue that
-// wires them to the DOM, and a typo there -- a bad import path, a selector that
-// matches nothing -- throws at module scope and leaves a blank page that no
-// module-level test would notice.
-say('\n=== public/index.html boots ===');
+// --- drive the real UI, the way a person does ------------------------------
+//
+// Everything above drives the modules directly. Every UI bug found so far was
+// invisible to that: the vendor bundles 404'd when the page was opened from
+// '/', and pressing play silently switched the chosen subtitle back off. Both
+// were reachable only by clicking, so this clicks.
+say('\n=== player UI, driven by clicking ===');
 try {
   const frame = document.createElement('iframe');
-  frame.style.cssText = 'width:900px;height:500px;border:1px solid #333';
+  frame.style.cssText = 'width:1100px;height:660px;border:1px solid #333';
   const errors = [];
   const loaded = new Promise(res => { frame.onload = res; });
   document.body.append(frame);
-  frame.src = '/public/index.html';
+  // The address a person is told to open, redirect and all -- not the direct
+  // path to index.html, which is exactly what hid the vendor 404s.
+  frame.src = '/';
   await loaded;
-  frame.contentWindow.addEventListener('error', e => errors.push(e.message));
-  frame.contentWindow.addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
+  const w = frame.contentWindow, d = frame.contentDocument;
+  w.addEventListener('error', e => errors.push(e.message));
+  w.addEventListener('unhandledrejection', e => errors.push(String(e.reason?.message ?? e.reason)));
+  await waitFor(() => w.player, 15000, 'the page to boot');
+  check('page booted', !!w.player, true);
+  check('served from /public/ so relative URLs resolve', d.baseURI.endsWith('/public/'), true);
 
-  // window.player is assigned on the last line of the module, so its presence
-  // means every import resolved and the whole script ran.
-  await waitFor(() => frame.contentWindow.player, 15000, 'index.html module to finish executing');
-  check('the page module executed to completion', !!frame.contentWindow.player, true);
-  const doc = frame.contentDocument;
-  for (const id of ['video', 'playBtn', 'file', 'extSub', 'url', 'loadUrl', 'pickFile', 'meta', 'tracks', 'log', 'placeholder']) {
-    check(`#${id} exists`, !!doc.getElementById(id), true);
+  // Vendor bundles have to be reachable FROM THE PAGE, not from wherever the
+  // test happens to live.
+  for (const f of ['jassub.js', 'libpgs.js', 'jassub-worker.wasm']) {
+    const r = await w.fetch(new URL('vendor/' + f, d.baseURI)).catch(() => null);
+    check(`vendor/${f} reachable from the page`, r?.ok === true, true);
   }
-  await new Promise(r => setTimeout(r, 500));
-  check('no errors during boot', errors.length, 0);
+
+  await waitFor(() => d.querySelectorAll('#samples button').length > 0, 15000, 'sample buttons');
+  const btn = [...d.querySelectorAll('#samples button')].find(b => /ASS/.test(b.textContent));
+  check('ASS sample button present', !!btn, true);
+  btn.click();
+  await waitFor(() => d.getElementById('subSel'), 30000, 'tracks to appear after load');
+  check('subtitle selector rendered', !!d.getElementById('subSel'), true);
+  check('audio selector rendered', !!d.getElementById('audioSel'), true);
+  check('video selector rendered', !!d.getElementById('videoSel'), true);
+
+  d.getElementById('playBtn').click();
+  const fv = d.getElementById('video');
+  await waitFor(() => fv.readyState >= 2, 40000, 'the UI to start playback');
+  check('playback started from the UI', fv.videoWidth > 0, true);
+
+  const sel = d.getElementById('subSel');
+  const opt = [...sel.options].find(o => !o.disabled && o.value !== '-1');
+  check('an enabled subtitle option exists', !!opt, true);
+  sel.value = opt.value;
+  sel.dispatchEvent(new w.Event('change'));
+
+  // The claim is pixels on screen, not "no exception was thrown".
+  const paint = await waitForPaint(fv, 45000);
+  if (paint.ok) {
+    say(`       overlay ${paint.w}x${paint.h}, ${paint.opaque} opaque px`);
+    check('subtitle painted after selecting it in the UI', paint.opaque > 0, true);
+  } else {
+    failures++;
+    say(`  FAIL  overlay unreadable: ${paint.why}`);
+  }
+
+  // Pressing play again must not silently switch the subtitle back off.
+  d.getElementById('playBtn').click();
+  await waitFor(() => fv.readyState >= 2, 40000, 'replay');
+  await new Promise(r => setTimeout(r, 2000));
+  check('the chosen subtitle survives pressing play', sel.value, opt.value);
+  const paint2 = await waitForPaint(fv, 45000);
+  check('still painting after replay', paint2.ok && paint2.opaque > 0, true);
+
+  check('no errors while driving the UI', errors.length, 0);
   if (errors.length) say(`       ${errors.join(' | ')}`);
   frame.remove();
 } catch (e) {
