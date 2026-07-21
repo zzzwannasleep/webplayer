@@ -39,9 +39,13 @@ Working:
 - Track compression (`ContentEncodings`): zlib and header stripping
 - Subtitles: effect-heavy ASS with embedded fonts, PGS, and external SRT
 
+- E-AC3 / AC-3 / DTS / TrueHD, on the `audio-eac3-ffmpeg` branch only:
+  decoded with ffmpeg.wasm and re-encoded to Opus so the browser still does
+  A/V sync. That branch is GPL-2.0-or-later because `@ffmpeg/core` is; `main`
+  stays MIT and plays those files silently.
+- Seeking in files with no Cues index, by binary-searching the clusters
+
 Not built yet:
-- E-AC3 / AC-3 / TrueHD / DTS audio. Rejected by both MSE and WebCodecs, so
-  these need a software decoder feeding WebAudio.
 - External ASS scripts. Embedded ones work; an external one has to find its
   fonts on the system, which is a different problem.
 - VobSub and DVB subtitles. Detected and reported, not drawn.
@@ -156,7 +160,7 @@ window to the foreground.
 
     npm install
     node tools/build-vendor.mjs       # bundles JASSUB + libpgs into public/vendor
-    npm run serve                     # http://localhost:8080/public/
+    npm run serve                     # http://localhost:8080/
 
 Tests:
 
