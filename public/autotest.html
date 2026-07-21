@@ -331,12 +331,15 @@ try {
   urlBox.value = '/mozahngtantexiaoass.mkv';
   d.getElementById('loadUrl').click();
   await waitFor(() => d.getElementById('subSel'), 40000, 'tracks to appear after load');
-  // A picker only appears where there is a real choice: this file has two
-  // subtitle tracks but one video and one audio track, and a dropdown that
-  // cannot be changed is noise in a control bar.
-  check('subtitle picker shown (2 tracks)', !!d.getElementById('subSel'), true);
-  check('single-choice audio picker hidden', !!d.getElementById('audioSel'), false);
-  check('single-choice video picker hidden', !!d.getElementById('videoSel'), false);
+  // Track pickers live behind the gear now, so opening it is part of the path.
+  const gear = d.getElementById('gearBtn'), menu = d.getElementById('picks');
+  check('track menu starts closed', menu.hidden, true);
+  gear.click();
+  check('gear opens the track menu', menu.hidden, false);
+  check('subtitle picker present', !!d.getElementById('subSel'), true);
+  check('audio picker present', !!d.getElementById('audioSel'), true);
+  check('video picker present', !!d.getElementById('videoSel'), true);
+  check('menu reports expanded to assistive tech', gear.getAttribute('aria-expanded'), 'true');
 
   // Loading now starts playback on its own; there is no button outside the frame.
   const fv = d.getElementById('video');
@@ -352,16 +355,18 @@ try {
   // be exercised rather than assumed present.
   check('in-frame controls visible once metadata arrives', d.getElementById('vctl').hidden, false);
   const pp = d.getElementById('ppBtn');
-  check('play/pause reflects playing state', pp.textContent.trim(), '❚❚');
+  // Icons are SVG now, so state is read from the accessible markup rather than
+  // from a glyph that renders differently on every platform.
+  const ppIcon = () => pp.querySelector('svg rect') ? 'pause' : 'play';
+  check('play/pause icon shows the pause state', ppIcon(), 'pause');
   pp.click();
   await waitFor(() => fv.paused, 5000, 'pause via the custom button');
   check('custom pause button pauses', fv.paused, true);
   // video.paused flips synchronously but the 'pause' EVENT is a task, so
   // asserting the label straight after the click races the handler that
   // updates it. Wait for the label itself.
-  await waitFor(() => pp.textContent.trim() === '▶', 5000, 'the button label to flip')
-    .catch(() => {});
-  check('button label flipped to play', pp.textContent.trim(), '▶');
+  await waitFor(() => ppIcon() === 'play', 5000, 'the icon to flip').catch(() => {});
+  check('icon flipped to play', ppIcon(), 'play');
   pp.click();
   await waitFor(() => !fv.paused, 5000, 'resume');
   check('custom play button resumes', fv.paused, false);
@@ -382,6 +387,13 @@ try {
   const w1 = d.getElementById('seekFill').style.width;
   check('progress bar has been painted', w1 !== '' && w1 !== '0%', true);
   check('fullscreen button present', !!d.getElementById('fsBtn'), true);
+  // Every icon has to be one consistent set, not a mix of glyphs and SVG.
+  const icons = [...d.querySelectorAll('#vctl .vbtn svg')];
+  check('all control icons are SVG', icons.length >= 4, true);
+  check('icons share one viewBox', new Set(icons.map(i => i.getAttribute('viewBox'))).size, 1);
+  check('icons share one stroke width', new Set(icons.map(i => i.getAttribute('stroke-width'))).size, 1);
+  check('seek bar has its own row', d.querySelector('#seek').getBoundingClientRect().top
+        < d.querySelector('.vrow').getBoundingClientRect().top, true);
 
   const sel = d.getElementById('subSel');
   const opt = [...sel.options].find(o => !o.disabled && o.value !== '-1');
@@ -411,6 +423,12 @@ try {
     sel.dispatchEvent(new w.Event('change'));
     await new Promise(r => setTimeout(r, 1200));
     check('turning subtitles off is honoured', sel.value, '-1');
+  }
+  // Escape must close the menu; a panel that only closes via its own button
+  // reads as stuck.
+  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Escape closes the track menu', menu.hidden, true);
+  if (false) {
   }
 
   check('no errors while driving the UI', errors.length, 0);

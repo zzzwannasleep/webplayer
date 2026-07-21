@@ -121,44 +121,87 @@
   #log time { color:var(--faint); margin-right:6px; }
 
   /* ---------- in-frame video controls ----------
-     Native controls are gone because a web player only ever needs in-page or
-     fullscreen -- but that means fullscreen and keyboard are now ours to
-     provide, and those are the two a viewer actually notices missing. */
+     Proportions follow what Plyr / Video.js / Shaka actually ship: the seek bar
+     gets its own row above the buttons (inline, it is squeezed to a stub and
+     hard to hit), buttons carry a 40px target, and icons are one 24px Lucide
+     set at a single stroke width. The emoji this replaced rendered at a
+     different size and weight on every OS. */
   .vctl {
     position:absolute; left:0; right:0; bottom:0; z-index:4;
-    display:flex; align-items:center; gap:11px; padding:9px 13px 10px;
+    display:flex; flex-direction:column; gap:2px; padding:26px 12px 8px;
     background:linear-gradient(180deg, transparent, rgba(0,0,0,.78));
-    font-variant-numeric:tabular-nums; font-size:12px; color:#e6edf5;
-    opacity:1; transition:opacity .22s;
+    color:#fff; opacity:1; transition:opacity .25s ease;
   }
   #stage.idle .vctl { opacity:0; pointer-events:none; }
   #stage.idle { cursor:none; }
+
+  .vrow { display:flex; align-items:center; gap:4px; }
+  .vspacer { flex:1; }
+
   .vbtn {
-    background:transparent; border:0; padding:2px 4px; cursor:pointer;
-    font-size:15px; line-height:1; color:inherit; border-radius:4px;
+    width:40px; height:40px; padding:8px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:transparent; border:0; border-radius:6px; cursor:pointer;
+    color:#fff; transition:background .15s, opacity .15s;
   }
-  .vbtn:hover { color:#fff; }
+  .vbtn:hover { background:rgba(255,255,255,.13); }
+  .vbtn:active { opacity:.65; }
+  .vbtn svg { width:22px; height:22px; display:block; }
   .vbtn:focus-visible, .seek:focus-visible, .vol:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
-  .vtime { min-width:44px; text-align:center; opacity:.9; }
-  .seek {
-    flex:1; height:14px; display:flex; align-items:center; cursor:pointer; position:relative;
+
+  /* seek: full width, its own row */
+  .seek { height:16px; display:flex; align-items:center; cursor:pointer; padding:0 2px; }
+  .seek-rail {
+    position:relative; width:100%; height:5px; border-radius:3px;
+    background:rgba(255,255,255,.26); transition:height .12s ease;
   }
-  .seek::before {
-    content:''; position:absolute; left:0; right:0; height:3px;
-    background:rgba(255,255,255,.22); border-radius:2px;
-  }
-  .seek-buf, .seek-fill { position:absolute; left:0; height:3px; border-radius:2px; }
-  .seek-buf { background:rgba(255,255,255,.34); width:0; }
+  .seek:hover .seek-rail, .seek:focus-visible .seek-rail { height:7px; }
+  .seek-buf, .seek-fill { position:absolute; left:0; top:0; height:100%; border-radius:3px; }
+  .seek-buf  { background:rgba(255,255,255,.28); width:0; }
   .seek-fill { background:var(--acc); width:0; }
   .seek-fill::after {
-    content:''; position:absolute; right:-5px; top:-3.5px;
-    width:10px; height:10px; border-radius:50%; background:#fff;
-    opacity:0; transition:opacity .15s;
+    content:''; position:absolute; right:-6px; top:50%; transform:translateY(-50%);
+    width:12px; height:12px; border-radius:50%; background:#fff;
+    opacity:0; transition:opacity .12s;
   }
   .seek:hover .seek-fill::after, .seek:focus-visible .seek-fill::after { opacity:1; }
-  .vol { width:74px; accent-color:var(--acc); cursor:pointer; }
-  /* Fullscreen: the stage goes fullscreen, so the subtitle overlay and these
-     controls come with it. Fullscreening the <video> would leave both behind. */
+
+  /* volume: slider expands on hover so the resting bar stays uncluttered */
+  .volume { display:flex; align-items:center; }
+  .vol {
+    width:0; opacity:0; height:4px; margin-left:0; accent-color:var(--acc);
+    cursor:pointer; transition:width .18s ease, opacity .18s ease, margin-left .18s ease;
+  }
+  .volume:hover .vol, .vol:focus-visible { width:62px; opacity:1; margin-left:6px; margin-right:6px; }
+
+  .vtime {
+    font:12.5px/1 ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums;
+    padding:0 8px; white-space:nowrap; opacity:.95;
+  }
+  .vtime i { opacity:.45; font-style:normal; margin:0 2px; }
+
+  /* track menu: a panel above the gear, the way every player does it --
+     three loose <select> floating in the bar never looked like one control set */
+  .menu-wrap { position:relative; }
+  .menu {
+    position:absolute; bottom:calc(100% + 8px); right:0; min-width:230px;
+    background:rgba(20,24,30,.97); border:1px solid rgba(255,255,255,.12);
+    border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5);
+    padding:8px; display:flex; flex-direction:column; gap:8px; z-index:10;
+  }
+  .menu[hidden] { display:none; }
+  .menu-row { display:flex; flex-direction:column; gap:4px; }
+  .menu-row > span {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--faint); font-weight:650;
+  }
+  .menu select {
+    width:100%; background:#0c1014; color:var(--fg);
+    border:1px solid var(--line); border-radius:5px; padding:6px 8px; font-size:13px;
+  }
+  .menu select:hover { border-color:var(--acc-dim); }
+  .menu select:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+
   #stage:fullscreen { border-radius:0; border:0; aspect-ratio:auto; width:100vw; height:100vh; }
   #stage:fullscreen video { object-fit:contain; }
 
@@ -205,18 +248,24 @@
     <div id="stage">
       <video id="video" playsinline></video>
       <div class="vctl" id="vctl" hidden>
-        <button class="vbtn" id="ppBtn" aria-label="播放/暂停">▶</button>
-        <span class="vtime" id="tNow">0:00</span>
         <div class="seek" id="seek" role="slider" tabindex="0"
              aria-label="进度" aria-valuemin="0" aria-valuenow="0">
-          <div class="seek-buf" id="seekBuf"></div>
-          <div class="seek-fill" id="seekFill"></div>
+          <div class="seek-rail"><div class="seek-buf" id="seekBuf"></div><div class="seek-fill" id="seekFill"></div></div>
         </div>
-        <span class="vtime" id="tEnd">0:00</span>
-        <button class="vbtn" id="muteBtn" aria-label="静音">🔊</button>
-        <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
-        <div class="picks" id="picks"></div>
-        <button class="vbtn" id="fsBtn" aria-label="全屏">⛶</button>
+        <div class="vrow">
+          <button class="vbtn" id="ppBtn" aria-label="播放/暂停"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></button>
+          <div class="volume">
+            <button class="vbtn" id="muteBtn" aria-label="静音"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg></button>
+            <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
+          </div>
+          <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
+          <div class="vspacer"></div>
+          <div class="menu-wrap">
+            <button class="vbtn" id="gearBtn" aria-label="轨道设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <div class="menu" id="picks" role="menu" hidden></div>
+          </div>
+          <button class="vbtn" id="fsBtn" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+        </div>
       </div>
       <div class="placeholder" id="placeholder">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -335,11 +384,13 @@ function render() {
     ${info.dynamicHdr ? `<div class="note">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
     ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
 
-  // In the control bar there is no room for labels, so the accessible name and
-  // the tooltip carry what the row used to say.
-  const field = (label, id, items, fmt, extraFirst) => items.length > (extraFirst ? 0 : 1) || extraFirst
-    ? `<select id="${id}" aria-label="${label}" title="${label}">${
-        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select>`
+  // Every track type is shown even when there is only one option: which audio
+  // track is playing is information, not just a control, and hiding it was the
+  // wrong call -- a viewer wants to see that a file is 5.1 E-AC3 whether or not
+  // there is a second track to switch to.
+  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
+    ? `<div class="menu-row"><span>${label}</span><select id="${id}" aria-label="${label}">${
+        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
     : '';
 
   $('#picks').innerHTML =
@@ -501,8 +552,11 @@ function paintProgress() {
 const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
 $('#ppBtn').addEventListener('click', togglePlay);
 video.addEventListener('click', togglePlay);
-video.addEventListener('play', () => { $('#ppBtn').textContent = '❚❚'; });
-video.addEventListener('pause', () => { $('#ppBtn').textContent = '▶'; });
+const ICON_PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 14 9-14 9z"/></svg>`, ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+const ICON_VOL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg>`, ICON_MUTE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`;
+const ICON_FULL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`, ICON_EXIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`;
+video.addEventListener('play', () => { $('#ppBtn').innerHTML = ICON_PAUSE; });
+video.addEventListener('pause', () => { $('#ppBtn').innerHTML = ICON_PLAY; });
 video.addEventListener('timeupdate', paintProgress);
 video.addEventListener('progress', paintProgress);
 video.addEventListener('loadedmetadata', () => { vctl.hidden = false; paintProgress(); });
@@ -520,10 +574,35 @@ seek.addEventListener('pointerup', e => { scrubbing = false; seek.releasePointer
 $('#muteBtn').addEventListener('click', () => { video.muted = !video.muted; syncVolume(); });
 $('#vol').addEventListener('input', e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; syncVolume(); });
 function syncVolume() {
-  $('#muteBtn').textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+  $('#muteBtn').innerHTML = video.muted || video.volume === 0 ? ICON_MUTE : ICON_VOL;
   $('#vol').value = String(video.muted ? 0 : video.volume);
 }
 video.addEventListener('volumechange', syncVolume);
+
+const menu = $('#picks'), gear = $('#gearBtn');
+gear.addEventListener('click', e => {
+  e.stopPropagation();
+  const open = menu.hidden;
+  menu.hidden = !open;
+  gear.setAttribute('aria-expanded', String(open));
+  if (open) wake();
+});
+// Any click elsewhere, or Escape, closes it -- a panel that only closes by
+// hitting the same button again is the kind of thing people report as stuck.
+document.addEventListener('click', e => {
+  if (!menu.hidden && !menu.contains(e.target) && e.target !== gear) {
+    menu.hidden = true; gear.setAttribute('aria-expanded', 'false');
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !menu.hidden) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+});
+// The bar must not fade out from under an open menu.
+const menuOpen = () => !menu.hidden;
+
+document.addEventListener('fullscreenchange', () => {
+  $('#fsBtn').innerHTML = document.fullscreenElement ? ICON_EXIT : ICON_FULL;
+});
 
 $('#fsBtn').addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();
@@ -535,10 +614,11 @@ let idleTimer = null;
 const wake = () => {
   stage.classList.remove('idle');
   clearTimeout(idleTimer);
-  if (!video.paused) idleTimer = setTimeout(() => stage.classList.add('idle'), 2200);
+  // 3s matches what Shaka and Video.js settle on; long enough to read the time.
+  if (!video.paused && !menuOpen()) idleTimer = setTimeout(() => stage.classList.add('idle'), 3000);
 };
 stage.addEventListener('pointermove', wake);
-stage.addEventListener('pointerleave', () => { if (!video.paused) stage.classList.add('idle'); });
+stage.addEventListener('pointerleave', () => { if (!video.paused && !menuOpen()) stage.classList.add('idle'); });
 video.addEventListener('pause', wake);
 video.addEventListener('play', wake);
 
