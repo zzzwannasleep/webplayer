@@ -335,8 +335,48 @@ try {
 
   d.getElementById('playBtn').click();
   const fv = d.getElementById('video');
-  await waitFor(() => fv.readyState >= 2, 40000, 'the UI to start playback');
-  check('playback started from the UI', fv.videoWidth > 0, true);
+  await waitFor(() => fv.readyState >= 2, 40000, 'the UI to decode a frame');
+  check('decoder produced a picture', fv.videoWidth > 0, true);
+  // readyState only says a frame is decodable. Whether the element is actually
+  // ADVANCING is a separate fact, and asserting the first while meaning the
+  // second is what made this block flaky.
+  await waitFor(() => !fv.paused && fv.currentTime > 0, 30000, 'playback to actually advance');
+  check('playback advancing from the UI', !fv.paused && fv.currentTime > 0, true);
+
+  // The native controls are gone, so everything they used to provide has to
+  // be exercised rather than assumed present.
+  check('in-frame controls visible once metadata arrives', d.getElementById('vctl').hidden, false);
+  const pp = d.getElementById('ppBtn');
+  check('play/pause reflects playing state', pp.textContent.trim(), '❚❚');
+  pp.click();
+  await waitFor(() => fv.paused, 5000, 'pause via the custom button');
+  check('custom pause button pauses', fv.paused, true);
+  // video.paused flips synchronously but the 'pause' EVENT is a task, so
+  // asserting the label straight after the click races the handler that
+  // updates it. Wait for the label itself.
+  await waitFor(() => pp.textContent.trim() === '▶', 5000, 'the button label to flip')
+    .catch(() => {});
+  check('button label flipped to play', pp.textContent.trim(), '▶');
+  pp.click();
+  await waitFor(() => !fv.paused, 5000, 'resume');
+  check('custom play button resumes', fv.paused, false);
+
+  // Space is the one keyboard binding a viewer will try without thinking.
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  await waitFor(() => fv.paused, 5000, 'space to pause');
+  check('space bar pauses', fv.paused, true);
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  await waitFor(() => !fv.paused, 5000, 'space to resume');
+
+  // Arrow keys must not scroll the page instead of seeking.
+  const before = fv.currentTime;
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  await new Promise(r => setTimeout(r, 400));
+  check('right arrow seeks forward', fv.currentTime > before, true);
+
+  const w1 = d.getElementById('seekFill').style.width;
+  check('progress bar has been painted', w1 !== '' && w1 !== '0%', true);
+  check('fullscreen button present', !!d.getElementById('fsBtn'), true);
 
   const sel = d.getElementById('subSel');
   const opt = [...sel.options].find(o => !o.disabled && o.value !== '-1');

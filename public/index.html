@@ -121,6 +121,48 @@
   #log .error { color:var(--err); } #log .warn { color:var(--warn); }
   #log time { color:var(--faint); margin-right:6px; }
 
+  /* ---------- in-frame video controls ----------
+     Native controls are gone because a web player only ever needs in-page or
+     fullscreen -- but that means fullscreen and keyboard are now ours to
+     provide, and those are the two a viewer actually notices missing. */
+  .vctl {
+    position:absolute; left:0; right:0; bottom:0; z-index:4;
+    display:flex; align-items:center; gap:11px; padding:9px 13px 10px;
+    background:linear-gradient(180deg, transparent, rgba(0,0,0,.78));
+    font-variant-numeric:tabular-nums; font-size:12px; color:#e6edf5;
+    opacity:1; transition:opacity .22s;
+  }
+  #stage.idle .vctl { opacity:0; pointer-events:none; }
+  #stage.idle { cursor:none; }
+  .vbtn {
+    background:transparent; border:0; padding:2px 4px; cursor:pointer;
+    font-size:15px; line-height:1; color:inherit; border-radius:4px;
+  }
+  .vbtn:hover { color:#fff; }
+  .vbtn:focus-visible, .seek:focus-visible, .vol:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+  .vtime { min-width:44px; text-align:center; opacity:.9; }
+  .seek {
+    flex:1; height:14px; display:flex; align-items:center; cursor:pointer; position:relative;
+  }
+  .seek::before {
+    content:''; position:absolute; left:0; right:0; height:3px;
+    background:rgba(255,255,255,.22); border-radius:2px;
+  }
+  .seek-buf, .seek-fill { position:absolute; left:0; height:3px; border-radius:2px; }
+  .seek-buf { background:rgba(255,255,255,.34); width:0; }
+  .seek-fill { background:var(--acc); width:0; }
+  .seek-fill::after {
+    content:''; position:absolute; right:-5px; top:-3.5px;
+    width:10px; height:10px; border-radius:50%; background:#fff;
+    opacity:0; transition:opacity .15s;
+  }
+  .seek:hover .seek-fill::after, .seek:focus-visible .seek-fill::after { opacity:1; }
+  .vol { width:74px; accent-color:var(--acc); cursor:pointer; }
+  /* Fullscreen: the stage goes fullscreen, so the subtitle overlay and these
+     controls come with it. Fullscreening the <video> would leave both behind. */
+  #stage:fullscreen { border-radius:0; border:0; aspect-ratio:auto; width:100vw; height:100vh; }
+  #stage:fullscreen video { object-fit:contain; }
+
   /* ---------- control bar under the video ---------- */
   .bar {
     display:flex; align-items:center; gap:10px; flex-wrap:wrap;
@@ -163,7 +205,20 @@
 <main>
   <div>
     <div id="stage">
-      <video id="video" controls playsinline></video>
+      <video id="video" playsinline></video>
+      <div class="vctl" id="vctl" hidden>
+        <button class="vbtn" id="ppBtn" aria-label="播放/暂停">▶</button>
+        <span class="vtime" id="tNow">0:00</span>
+        <div class="seek" id="seek" role="slider" tabindex="0"
+             aria-label="进度" aria-valuemin="0" aria-valuenow="0">
+          <div class="seek-buf" id="seekBuf"></div>
+          <div class="seek-fill" id="seekFill"></div>
+        </div>
+        <span class="vtime" id="tEnd">0:00</span>
+        <button class="vbtn" id="muteBtn" aria-label="静音">🔊</button>
+        <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
+        <button class="vbtn" id="fsBtn" aria-label="全屏">⛶</button>
+      </div>
       <div class="placeholder" id="placeholder">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
@@ -441,6 +496,102 @@ for (const s of SAMPLES) {
     $('#samples').append(b);
   }).catch(() => {});
 }
+
+// ---- in-frame video controls -------------------------------------------
+// Written out because the native ones are gone. Fullscreen and keyboard are
+// the two things a viewer notices the moment they are missing; the rest of
+// what <video controls> offered (cast, PiP) is not wanted here.
+const stage = $('#stage'), vctl = $('#vctl'), seek = $('#seek');
+const clock = s => {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+           : `${m}:${String(sec).padStart(2, '0')}`;
+};
+
+function paintProgress() {
+  const d = video.duration;
+  if (!Number.isFinite(d) || d <= 0) return;
+  $('#seekFill').style.width = `${(video.currentTime / d) * 100}%`;
+  // Buffered is worth drawing: on a 20 GB file over Range requests, knowing
+  // how far ahead it is safe to drag is the difference between a smooth seek
+  // and a stall.
+  const b = video.buffered;
+  let end = 0;
+  for (let i = 0; i < b.length; i++) {
+    if (video.currentTime >= b.start(i) - 0.5 && video.currentTime <= b.end(i)) end = b.end(i);
+  }
+  $('#seekBuf').style.width = `${Math.min(100, (end / d) * 100)}%`;
+  $('#tNow').textContent = clock(video.currentTime);
+  $('#tEnd').textContent = clock(d);
+  seek.setAttribute('aria-valuenow', String(Math.round(video.currentTime)));
+  seek.setAttribute('aria-valuemax', String(Math.round(d)));
+  seek.setAttribute('aria-valuetext', `${clock(video.currentTime)} / ${clock(d)}`);
+}
+
+const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
+$('#ppBtn').addEventListener('click', togglePlay);
+video.addEventListener('click', togglePlay);
+video.addEventListener('play', () => { $('#ppBtn').textContent = '❚❚'; });
+video.addEventListener('pause', () => { $('#ppBtn').textContent = '▶'; });
+video.addEventListener('timeupdate', paintProgress);
+video.addEventListener('progress', paintProgress);
+video.addEventListener('loadedmetadata', () => { vctl.hidden = false; paintProgress(); });
+
+const seekToClientX = x => {
+  const r = seek.getBoundingClientRect();
+  const d = video.duration;
+  if (Number.isFinite(d) && d > 0) video.currentTime = Math.max(0, Math.min(d, ((x - r.left) / r.width) * d));
+};
+let scrubbing = false;
+seek.addEventListener('pointerdown', e => { scrubbing = true; seek.setPointerCapture(e.pointerId); seekToClientX(e.clientX); });
+seek.addEventListener('pointermove', e => { if (scrubbing) seekToClientX(e.clientX); });
+seek.addEventListener('pointerup', e => { scrubbing = false; seek.releasePointerCapture(e.pointerId); });
+
+$('#muteBtn').addEventListener('click', () => { video.muted = !video.muted; syncVolume(); });
+$('#vol').addEventListener('input', e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; syncVolume(); });
+function syncVolume() {
+  $('#muteBtn').textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+  $('#vol').value = String(video.muted ? 0 : video.volume);
+}
+video.addEventListener('volumechange', syncVolume);
+
+$('#fsBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen().catch(e => player.log(`全屏失败: ${e.message}`, 'warn'));
+});
+
+// Hide the controls while playing and the pointer is still.
+let idleTimer = null;
+const wake = () => {
+  stage.classList.remove('idle');
+  clearTimeout(idleTimer);
+  if (!video.paused) idleTimer = setTimeout(() => stage.classList.add('idle'), 2200);
+};
+stage.addEventListener('pointermove', wake);
+stage.addEventListener('pointerleave', () => { if (!video.paused) stage.classList.add('idle'); });
+video.addEventListener('pause', wake);
+video.addEventListener('play', wake);
+
+// Keyboard. Ignored while typing in the URL box, which is the one place on
+// this page where space and arrows mean something else.
+addEventListener('keydown', e => {
+  const t = e.target;
+  if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
+  const d = video.duration;
+  switch (e.key) {
+    case ' ': case 'k': e.preventDefault(); togglePlay(); break;
+    case 'ArrowRight': e.preventDefault(); if (Number.isFinite(d)) video.currentTime = Math.min(d, video.currentTime + 5); break;
+    case 'ArrowLeft': e.preventDefault(); video.currentTime = Math.max(0, video.currentTime - 5); break;
+    case 'ArrowUp': e.preventDefault(); video.volume = Math.min(1, video.volume + 0.05); break;
+    case 'ArrowDown': e.preventDefault(); video.volume = Math.max(0, video.volume - 0.05); break;
+    case 'm': video.muted = !video.muted; break;
+    case 'f': $('#fsBtn').click(); break;
+    default: return;
+  }
+  wake();
+});
+syncVolume();
 
 video.addEventListener('error', () => {
   const e = video.error;
