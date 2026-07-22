@@ -1,0 +1,99 @@
+<!doctype html><meta charset="utf-8">
+<title>boot check</title>
+<!--
+  Does each player page still evaluate its module cleanly? A top-level
+  ReferenceError leaves a page that renders but does nothing, and no unit test
+  can see it -- so both pages are loaded in an iframe here, their errors are
+  captured, and the danmaku button (un-hidden only at the very end of the
+  module) is used as proof that evaluation reached the bottom.
+-->
+<style>iframe{width:900px;height:560px;border:1px solid #333}</style>
+<pre id="out"></pre>
+<script>
+const out = [];
+const ok = (n, c, d = '') => out.push((c ? 'PASS  ' : 'FAIL  ') + n + (d ? '  -> ' + d : ''));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const send = () => fetch('/collect', { method: 'POST', body: out.join('\n') + '\n' }).catch(() => {});
+setTimeout(() => { out.push('WATCHDOG', 'BOOT CHECK DONE'); send(); }, 45000);
+
+async function boot(page) {
+  const f = document.createElement('iframe');
+  f.src = page;
+  document.body.append(f);
+  const errs = [];
+  await new Promise(r => { f.onload = r; });
+  f.contentWindow.addEventListener('error', e => errs.push(e.message));
+  f.contentWindow.addEventListener('unhandledrejection', e => errs.push('rejected: ' + (e.reason?.message || e.reason)));
+  await sleep(3000);
+  const d = f.contentDocument, w = f.contentWindow;
+  ok(`${page} evaluated with no error`, errs.length === 0, errs.join(' | ') || 'clean');
+  const btn = d.getElementById('dmkBtn');
+  ok(`${page} reached the end of its module`, btn && !btn.hidden, btn ? `hidden=${btn.hidden}` : 'no button');
+  ok(`${page} danmaku layer is mounted`, !!d.querySelector('#stage .dmk'));
+  ok(`${page} subtitles still composite above danmaku`,
+    w.getComputedStyle(d.querySelector('#stage .dmk')).zIndex === '2');
+  // Gear opens onto the root list, and that list is groups, not raw controls.
+  d.getElementById('gearBtn').click();
+  await sleep(120);
+  const root = d.getElementById('picks');
+  const groups = [...root.querySelectorAll('.mrow[data-group]')].map(x => x.querySelector('.mrow-l').textContent);
+  ok(`${page} gear opens a group list`, groups.length > 0, groups.join(' | ') || 'empty');
+  ok(`${page} the group list has a 弹幕 entry`, groups.includes('弹幕'));
+  ok(`${page} the root list has no bare controls`, root.querySelectorAll('select,input').length === 0);
+  f.remove();
+}
+
+/**
+ * The loaded path: a real multi-track file, so the groups that depend on
+ * `info` are exercised. Rewriting track selection to live in CHOICE instead of
+ * in the DOM is exactly the change that could silently stop switching tracks.
+ */
+async function loaded(page) {
+  const f = document.createElement('iframe');
+  f.src = page;
+  document.body.append(f);
+  const errs = [];
+  await new Promise(r => { f.onload = r; });
+  f.contentWindow.addEventListener('error', e => errs.push(e.message));
+  f.contentWindow.addEventListener('unhandledrejection', e => errs.push('rejected: ' + (e.reason?.message || e.reason)));
+  const d = f.contentDocument;
+  for (let i = 0; i < 60 && !d.querySelector('#picks .mrow[data-group]'); i++) await sleep(500);
+
+  ok('a loaded file evaluates cleanly', errs.length === 0, errs.join(' | ') || 'clean');
+  d.getElementById('gearBtn').click();
+  await sleep(150);
+  const root = d.getElementById('picks');
+  const groups = [...root.querySelectorAll('.mrow[data-group]')].map(x => x.querySelector('.mrow-l').textContent);
+  ok('loaded: the root list shows every group', groups.includes('轨道') && groups.includes('弹幕'), groups.join(' | '));
+  ok('loaded: 轨道 shows the playing tracks, not just a chevron',
+    /\S/.test(root.querySelector('[data-group="track"] .mrow-v').textContent),
+    root.querySelector('[data-group="track"] .mrow-v').textContent);
+
+  root.querySelector('[data-group="track"]').click();
+  await sleep(80);
+  const audio = root.querySelector('select[data-row="audio"]');
+  ok('loaded: the 轨道 panel has the audio picker', !!audio, audio ? audio.options.length + ' options' : 'missing');
+  if (audio && audio.options.length > 1) {
+    const before = d.getElementById('log').textContent.length;
+    audio.value = '1';
+    audio.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(3000);
+    // The panel stays open (you switch tracks to compare them), repainted from
+    // CHOICE -- so the picker itself is the evidence the choice was recorded,
+    // and a grown log is the evidence the stream really restarted.
+    const now = root.querySelector('select[data-row="audio"]');
+    ok('loaded: switching audio is recorded and restarts the stream',
+      now?.value === '1' && d.getElementById('log').textContent.length > before,
+      `picker=${now?.value} log grew ${d.getElementById('log').textContent.length - before} chars`);
+  } else ok('loaded: switching audio takes effect', false, 'sample has one audio track — cannot exercise the switch');
+  f.remove();
+}
+
+(async () => {
+  try { await boot('./index.html'); await boot('./play.html'); await loaded('./index.html?url=/samples/audio-multi.mkv'); }
+  catch (e) { out.push('ERROR ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]); }
+  out.push('BOOT CHECK DONE');
+  document.getElementById('out').textContent = out.join('\n');
+  send();
+})();
+</script>

@@ -664,6 +664,13 @@ async function play(item, choice, fromStart){
     if (source?.Size) q.set('size', source.Size);
     if (pb.playSessionId) q.set('ps', pb.playSessionId);
     if (startTicks) q.set('t', Math.round(ticksToSec(startTicks)));
+    // Series name + episode number: what a danmaku lookup searches on. Sent
+    // explicitly because the composed title above is lossy (it folds the
+    // episode name in, and a movie has no S/E at all).
+    if (item.Type === 'Episode') {
+      q.set('series', item.SeriesName || '');
+      if (item.IndexNumber) q.set('ep', item.IndexNumber);
+    } else q.set('series', item.Name || '');
 
     // Audio: the chooser index is positional over the source's audio streams,
     // which the player enumerates in the same container order. Carry the

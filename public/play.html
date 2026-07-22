@@ -66,9 +66,11 @@
      render true. Dropped in fullscreen (alpha honoured there). .JASSUB only. */
   #stage canvas.JASSUB { filter: opacity(0.996); }
   #stage:fullscreen canvas.JASSUB { filter: none; }
-  /* Anime4K's opaque output canvas covers the video; subtitle canvases stay above. */
+  /* Anime4K's opaque output canvas covers the video; danmaku goes over that and
+     subtitle canvases over everything -- subtitles are the layer that must stay
+     readable, comments are the layer you chose to add. */
   #stage canvas.A4K { z-index:1; }
-  #stage canvas:not(.A4K) { z-index:2; }
+  #stage canvas:not(.A4K) { z-index:3; }
   video::cue { background:rgba(0,0,0,.55); color:#fff; }
 
   .placeholder {
@@ -144,19 +146,23 @@
   .vtime { font:12.5px/1 ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums; padding:0 8px; white-space:nowrap; opacity:.95; }
   .vtime i { opacity:.45; font-style:normal; margin:0 2px; }
   .menu-wrap { position:relative; }
+  /* Layout only -- the rows, fields and two-level navigation are styled by
+     src/ui/menu.js so both players stay identical without a copied block. */
   .menu {
-    position:absolute; bottom:calc(100% + 8px); right:0; min-width:230px;
+    position:absolute; bottom:calc(100% + 8px); right:0;
     background:rgba(20,24,30,.97); border:1px solid rgba(255,255,255,.12);
-    border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5);
-    padding:8px; display:flex; flex-direction:column; gap:8px; z-index:10;
+    border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5); z-index:10;
   }
   .menu[hidden] { display:none; }
-  .menu-row { display:flex; flex-direction:column; gap:4px; }
-  .menu-note { font-size:11px; color:var(--faint); margin-top:-4px; font-variant-numeric:tabular-nums; }
-  .menu-row > span { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); font-weight:650; }
-  .menu select { width:100%; background:#0c1014; color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:6px 8px; font-size:13px; }
-  .menu select:hover { border-color:var(--acc-dim); }
-  .menu select:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  .vbtn.on { color:var(--acc); }
+  .vbtn.on::after { content:''; position:absolute; bottom:5px; width:14px; height:2px; border-radius:2px; background:currentColor; }
+  .vbtn { position:relative; }
+  #dropHint {
+    position:absolute; inset:0; z-index:9; display:none; place-items:center;
+    background:rgba(10,12,15,.72); border:2px dashed var(--acc); border-radius:var(--r);
+    color:var(--fg); font-weight:600; pointer-events:none;
+  }
+  #stage.dragging #dropHint { display:grid; }
   #stage:fullscreen { border-radius:0; border:0; aspect-ratio:auto; width:100vw; height:100vh; }
   #stage:fullscreen video { object-fit:contain; }
 </style>
@@ -183,6 +189,7 @@
           </div>
           <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
           <div class="vspacer"></div>
+          <button class="vbtn" id="dmkBtn" aria-label="弹幕" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
           <div class="menu-wrap">
             <button class="vbtn" id="gearBtn" aria-label="轨道设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             <div class="menu" id="picks" role="menu" hidden></div>
@@ -194,6 +201,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
         <b id="phText">正在解析…</b>
       </div>
+      <div id="dropHint">松手载入弹幕文件（.xml / .json）</div>
     </div>
   </div>
 
@@ -215,9 +223,12 @@ import { Subtitles, attachSrt } from '../src/subs/index.js';
 import { VolumeStage } from '../src/audio/gain.js';
 import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
+import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
+import { DanmakuLayer, loadRenderer, source, parseAny, loadSettings, saveSettings, loadTrack, saveTrack, forgetTrack } from '../src/danmaku/index.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
+const stage = $('#stage');   // every overlay (subtitles, Anime4K, danmaku) layers into this
 const player = new Player(video);
 const subs = new Subtitles(player, { log: (m, l) => player.log(m, l) });
 const volume = new VolumeStage(video, { log: (m, l) => player.log(m, l) });
@@ -254,7 +265,16 @@ const WANT = {
   sub: P.has('sub') ? Number(P.get('sub')) : null, sublang: P.get('sublang') || '',
   suburl: P.get('suburl'), sublabel: P.get('sublabel') || '字幕',
   subwarn: P.get('subwarn'),
+  // What a danmaku lookup needs. emby.html sends them explicitly; when this page
+  // is opened by hand they are recovered from the "Name S01E02 · Title" title,
+  // because a series name plus an episode number is the whole query.
+  series: P.get('series') || '',
+  ep: Number(P.get('ep')) || 0,
 };
+if (!WANT.series || !WANT.ep) {
+  const m = /^(.*?)\s*S(\d+)E(\d+)/i.exec(WANT.title);
+  if (m) { WANT.series ||= m[1].trim(); WANT.ep ||= Number(m[3]); }
+}
 $('#title').textContent = WANT.title;
 document.title = `LinWeb · ${WANT.title}`;
 
@@ -324,53 +344,234 @@ function render() {
       ${decode}
     </dl>`;
 
-  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
-    ? `<div class="menu-row"><span>${label}</span><select id="${id}" aria-label="${label}">${(extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
-    : '';
-
-  $('#picks').innerHTML =
-    (LINES.length > 1 ? `<div class="menu-row"><span>线路</span><select id="lineSel" aria-label="线路">${
-      LINES.map(l => `<option value="${l.url}"${l.url === line ? ' selected' : ''}>${l.name}</option>`).join('')}</select></div>` : '') +
-    field('视频', 'videoSel', info.video,
-      (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
-    field('音频', 'audioSel', info.audio,
-      (x, i) => `<option value="${i}">${x.label}${x.supported ? '' : ` — ${x.note?.name || '软解'}`}</option>`) +
-    field('字幕', 'subSel', info.subtitles,
-      (x, i) => {
-        const ok = Subtitles.SUPPORTED.has(x.format);
-        return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : ' ✕ 无渲染器'}</option>`;
-      }, '<option value="-1">关闭</option>')
-    + (volume.ok ? `<div class="menu-row"><span>响度</span><select id="gainSel" aria-label="响度">
-         <option value="1">原始音量</option><option value="auto">自动增益</option>
-         <option value="1.5">+3.5 dB</option><option value="2">+6 dB</option><option value="3">+9.5 dB</option>
-       </select></div><div class="menu-note" id="gainNote"></div>` : '')
-    // SDR only -- see the main page and src/video/anime4k.js for why HDR is excluded.
-    + (Anime4K.supported && !info.hdr && !info.dolbyVision
-       ? `<div class="menu-row"><span>超分</span><select id="a4kSel" aria-label="动画超分 Anime4K">
-            <option value="off">关闭</option>
-            <option value="A">Mode A · 通用</option>
-            <option value="B">Mode B · 柔化</option>
-            <option value="C">Mode C · 去噪</option>
-          </select></div><div class="menu-note">仅 SDR 动画 · GPU 超分，开启时占用整帧渲染</div>` : '');
-
-  $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
-  $('#lineSel')?.addEventListener('change', e => switchLine(e.target.value));
-  const a4kSel = $('#a4kSel');
-  if (a4kSel) { a4kSel.value = a4kMode; a4kSel.addEventListener('change', e => applyAnime4K(e.target.value)); }
-  $('#gainSel')?.addEventListener('change', e => {
-    const v = e.target.value;
-    if (v === 'auto') { volume.setAuto(true); volume.boost = 1; }
-    else { volume.setAuto(false); volume.boost = Number(v); }
-    paintGain();
-  });
-  paintGain();
-
-  // Honour the detail-page picks BEFORE start() reads the selects.
+  // Honour the detail-page picks BEFORE start() reads them.
   seedChoice();
+  paintMenu();
 
   if (info.video.some(v => v.supported)) start();
   else player.log('没有可播放的视频轨', 'error');
 }
+
+// ---- the settings menu ---------------------------------------------------
+// Every track and every overlay used to add one more <select> to a single
+// column that was already taller than a phone in portrait. The picks now live
+// in a two-level panel (src/ui/menu.js): a root list of groups showing their
+// current value, each opening into its own controls. Choices live HERE, in
+// CHOICE, not in the DOM -- a control inside a closed panel does not exist.
+const menu = new SettingsMenu($('#picks'));
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() }));
+
+const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
+const label = (x, i) => x.label || `轨道 ${i + 1}`;
+
+// Deliberately built even when `info` is null. The stream failing to load is
+// exactly when a viewer needs the line picker, and an empty menu at that moment
+// leaves them with no way out but the back button.
+function buildGroups() {
+  const a4kOk = info && Anime4K.supported && !info.hdr && !info.dolbyVision;
+  const A4K_NAMES = { off: '关闭', A: 'Mode A · 通用', B: 'Mode B · 柔化', C: 'Mode C · 去噪' };
+  return [
+    LINES.length > 1 && {
+      key: 'line', label: '线路', value: LINES.find(l => l.url === line)?.name || '',
+      rows: [{ type: 'select', id: 'line', label: '入口域名', value: line,
+        options: LINES.map(l => ({ value: l.url, label: l.name })), onChange: v => switchLine(v) }],
+    },
+    info && {
+      key: 'track', label: '轨道',
+      value: [info.audio[CHOICE.audio] && label(info.audio[CHOICE.audio], CHOICE.audio),
+              CHOICE.sub >= 0 ? label(info.subtitles[CHOICE.sub], CHOICE.sub) : '无字幕'].filter(Boolean).join(' · '),
+      rows: [
+        info.video.length > 1 && { type: 'select', id: 'video', label: '视频', value: CHOICE.video,
+          options: info.video.map((x, i) => ({ value: i, label: label(x, i) + (x.supported ? '' : ' ✕ 无法播放'), disabled: !x.supported })),
+          onChange: v => { CHOICE.video = Number(v); start(); } },
+        info.audio.length && { type: 'select', id: 'audio', label: '音频', value: CHOICE.audio,
+          options: info.audio.map((x, i) => ({ value: i, label: label(x, i) + (x.supported ? '' : ` — ${x.note?.name || '软解'}`) })),
+          onChange: v => { CHOICE.audio = Number(v); start(); } },
+        { type: 'select', id: 'sub', label: '字幕', value: CHOICE.sub,
+          options: [{ value: -1, label: '关闭' }, ...info.subtitles.map((x, i) => {
+            const ok = Subtitles.SUPPORTED.has(x.format);
+            return { value: i, label: label(x, i) + (ok ? '' : ' ✕ 无渲染器'), disabled: !ok };
+          })],
+          onChange: v => applySubtitle(Number(v)) },
+      ].filter(Boolean),
+    },
+    danmakuGroup(),
+    info && volume.ok && {
+      key: 'gain', label: '响度', value: { 1: '原始', auto: '自动增益' }[CHOICE.gain] || `+${CHOICE.gain}×`,
+      rows: [
+        { type: 'select', id: 'gain', label: '增益', value: CHOICE.gain,
+          options: [{ value: '1', label: '原始音量' }, { value: 'auto', label: '自动增益' },
+                    { value: '1.5', label: '+3.5 dB' }, { value: '2', label: '+6 dB' }, { value: '3', label: '+9.5 dB' }],
+          onChange: v => {
+            CHOICE.gain = v;
+            if (v === 'auto') { volume.setAuto(true); volume.boost = 1; }
+            else { volume.setAuto(false); volume.boost = Number(v); }
+            paintMenu();
+          } },
+        { type: 'note', text: gainNote() },
+      ],
+    },
+    // SDR only -- see the main page and src/video/anime4k.js for why HDR is excluded.
+    a4kOk && {
+      key: 'a4k', label: '超分', value: A4K_NAMES[a4kMode],
+      rows: [
+        { type: 'select', id: 'a4k', label: '动画超分 Anime4K', value: a4kMode,
+          options: Object.entries(A4K_NAMES).map(([value, label]) => ({ value, label })),
+          onChange: v => { applyAnime4K(v); paintMenu(); } },
+        { type: 'note', text: '仅 SDR 动画 · GPU 超分，开启时占用整帧渲染' },
+      ],
+    },
+  ].filter(Boolean);
+}
+
+const paintMenu = () => menu.set(buildGroups());
+
+// ---- danmaku -------------------------------------------------------------
+// Comments fly over the picture from a track that is remembered per item: the
+// second time an episode is opened they are simply there, no lookup, no
+// network. Settings are global (localStorage), the track itself is per item
+// (IndexedDB) -- see src/danmaku/store.js.
+//
+// Where a track comes from is the constrained part. dandanplay and bilibili
+// both answer a browser with no Access-Control-Allow-Origin (measured: every
+// /api/v2/* route 403s with "Missing Authentication Headers" and no CORS
+// header at all), and dandanplay's signature needs an AppSecret, which cannot
+// live in a page anyone can View Source on. So this page talks only to a
+// dandanplay-SHAPED endpoint the viewer runs and configures here -- and works
+// with no endpoint at all from a dropped file.
+const DM = {
+  layer: null,
+  s: loadSettings(),
+  key: WANT.id ? `emby:${WANT.id}` : '',
+  name: '',            // where the loaded track came from
+  busy: '',            // in-flight status, shown in the panel
+  picks: [],           // match candidates, when there was more than one
+};
+
+function danmakuGroup() {
+  if (!DM.layer) return null;
+  const s = DM.s;
+  const n = DM.layer.count;
+  const canMatch = !!(s.api && (WANT.series || WANT.title));
+  return {
+    key: 'dmk', label: '弹幕',
+    value: DM.busy || (n ? `${s.on ? '' : '已关闭 · '}${n} 条` : '未加载'),
+    rows: [
+      { type: 'toggle', id: 'dmkOn', label: '显示弹幕', value: s.on, onChange: v => { setDanmaku({ on: v }); } },
+      { type: 'note', text: DM.busy || (n ? `${DM.name}｜${n} 条` : '还没有弹幕：自动匹配，或载入本地 .xml / .json 文件（也可直接拖进画面）') },
+      { type: 'button', id: 'dmkMatch', label: '自动匹配弹幕', disabled: !canMatch || !!DM.busy,
+        value: s.api ? '' : '需先填服务地址', onClick: autoMatch },
+      DM.picks.length > 1 && { type: 'select', id: 'dmkPick', label: '匹配结果', value: '',
+        options: [{ value: '', label: `${DM.picks.length} 个候选，选一个` }, ...DM.picks.map(p => ({ value: p.id, label: p.label }))],
+        onChange: v => v && fetchEpisode(v) },
+      { type: 'button', id: 'dmkFile', label: '载入本地弹幕文件', onClick: () => fileInput.click() },
+      n && { type: 'button', id: 'dmkClear', label: '清除本片弹幕', onClick: clearDanmaku },
+      { type: 'range', id: 'dmkOpacity', label: '不透明度', hint: `${Math.round(s.opacity * 100)}%`,
+        min: 0.1, max: 1, step: 0.05, value: s.opacity, onInput: v => setDanmaku({ opacity: Number(v) }) },
+      { type: 'range', id: 'dmkSize', label: '字号', hint: `${s.fontSize}`, min: 12, max: 48, step: 1, value: s.fontSize,
+        onInput: v => setDanmaku({ fontSize: Number(v) }) },
+      { type: 'range', id: 'dmkSpeed', label: '速度', hint: `${s.speed}`, min: 60, max: 320, step: 10, value: s.speed,
+        onInput: v => setDanmaku({ speed: Number(v) }) },
+      { type: 'range', id: 'dmkArea', label: '显示区域', hint: `画面上 ${Math.round(s.area * 100)}%`,
+        min: 0.2, max: 1, step: 0.1, value: s.area, onInput: v => setDanmaku({ area: Number(v) }) },
+      { type: 'range', id: 'dmkLimit', label: '每秒上限', hint: s.limit ? `${s.limit} 条` : '不限',
+        min: 0, max: 40, step: 1, value: s.limit, onInput: v => setDanmaku({ limit: Number(v) }) },
+      { type: 'text', id: 'dmkBlock', label: '屏蔽词（逗号分隔，/regex/ 亦可）', value: (s.block || []).join(','),
+        placeholder: '前方高能,/^\\d+$/', onChange: v => setDanmaku({ block: v.split(',').map(x => x.trim()).filter(Boolean) }) },
+      { type: 'text', id: 'dmkApi', label: '弹幕服务地址', value: s.api, placeholder: 'https://…（弹弹play 接口格式）',
+        onChange: v => setDanmaku({ api: v.trim() }) },
+      { type: 'note', text: '第三方弹幕站不放行浏览器跨域，且需要密钥——网页无法直连。填一个你自己部署的、兼容弹弹play接口的地址即可；留空则只用本地文件。' },
+    ].filter(Boolean),
+  };
+}
+
+/** The single write path for danmaku settings: persist, re-render, repaint. */
+function setDanmaku(patch) {
+  DM.s = { ...DM.s, ...patch };
+  saveSettings(DM.s);
+  DM.layer?.apply(DM.s);
+  $('#dmkBtn').classList.toggle('on', DM.s.on);
+  $('#dmkBtn').setAttribute('aria-pressed', String(DM.s.on));
+  paintMenu();
+}
+
+function setTrack(list, name, persist = true) {
+  DM.name = name;
+  DM.busy = '';
+  DM.layer.setComments(list, name);
+  if (persist && DM.key) saveTrack(DM.key, name, list);
+  player.log(`弹幕已载入: ${name}（${list.length} 条）`);
+  setDanmaku(list.length ? { on: true } : {});
+}
+
+async function clearDanmaku() {
+  DM.picks = [];
+  DM.name = '';
+  DM.layer.setComments([], '');
+  await forgetTrack(DM.key);
+  paintMenu();
+}
+
+/** Series name + episode number -> a comment track, via the configured server. */
+async function autoMatch() {
+  DM.picks = [];
+  DM.busy = '匹配中…';
+  paintMenu();
+  try {
+    const found = await source.episodes(DM.s.api, WANT.series || WANT.title, WANT.ep);
+    if (!found.length) throw new Error('没有匹配到剧集');
+    DM.picks = found;
+    await fetchEpisode(found[0].id);
+  } catch (e) {
+    DM.busy = '';
+    player.log(`弹幕匹配失败: ${e.message}`, 'warn');
+    DM.busy = e.message;
+    paintMenu();
+  }
+}
+
+async function fetchEpisode(id) {
+  const name = DM.picks.find(p => String(p.id) === String(id))?.label || `弹幕 ${id}`;
+  DM.busy = '下载弹幕…';
+  paintMenu();
+  try {
+    setTrack(await source.comments(DM.s.api, id), name);
+  } catch (e) {
+    DM.busy = e.message;
+    player.log(`弹幕下载失败: ${e.message}`, 'warn');
+    paintMenu();
+  }
+}
+
+async function importFile(file) {
+  if (!file) return;
+  try {
+    const list = parseAny(await file.text());
+    if (!list.length) throw new Error('文件里没有可识别的弹幕');
+    DM.picks = [];
+    setTrack(list, file.name);
+  } catch (e) { player.log(`弹幕文件读取失败: ${e.message}`, 'warn'); DM.busy = e.message; paintMenu(); }
+}
+
+const fileInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.xml,.json,text/xml,application/json', hidden: true });
+fileInput.addEventListener('change', () => { importFile(fileInput.files[0]); fileInput.value = ''; });
+document.body.append(fileInput);
+
+// Dropping a file on the picture is the shortest path, so it is also wired.
+for (const ev of ['dragenter', 'dragover']) stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('dragging'); });
+for (const ev of ['dragleave', 'drop']) stage.addEventListener(ev, e => { if (ev === 'drop') e.preventDefault(); stage.classList.remove('dragging'); });
+stage.addEventListener('drop', e => importFile(e.dataTransfer?.files?.[0]));
+
+$('#dmkBtn').addEventListener('click', () => setDanmaku({ on: !DM.s.on }));
+
+(async () => {
+  try { await loadRenderer(); } catch (e) { return player.log(`弹幕渲染器加载失败: ${e.message}`, 'warn'); }
+  DM.layer = new DanmakuLayer(video, stage, { log: player.log });
+  $('#dmkBtn').hidden = false;
+  const saved = await loadTrack(DM.key);
+  if (saved?.comments?.length) { DM.name = saved.name; DM.layer.setComments(saved.comments, saved.name); }
+  setDanmaku({});     // applies the stored settings and repaints the button
+})();
 
 // Positional first (the Emby stream list and the demuxed track list are both the
 // container's tracks in order, so index N maps to index N); language only
@@ -382,16 +583,15 @@ function pick(list, idx, lang) {
 }
 
 function seedChoice() {
-  const aSel = $('#audioSel');
-  if (aSel) aSel.value = String(pick(info.audio, WANT.aud, WANT.audlang));
+  CHOICE.video = pick(info.video, 0, '');
+  CHOICE.audio = pick(info.audio, WANT.aud, WANT.audlang);
 
-  const sSel = $('#subSel');
   if (WANT.subwarn) player.log(`所选字幕为图形格式，浏览器暂无法外挂渲染：${WANT.subwarn}`, 'warn');
   if (WANT.suburl) {
-    if (sSel) sSel.value = '-1';   // client renderer unused; Emby serves it as a <track>
+    CHOICE.sub = -1;               // client renderer unused; Emby serves it as a <track>
     attachEmbySub();
-  } else if (WANT.sub != null && sSel) {
-    sSel.value = String(pick(info.subtitles, WANT.sub, WANT.sublang));
+  } else if (WANT.sub != null) {
+    CHOICE.sub = pick(info.subtitles, WANT.sub, WANT.sublang);
   }
 }
 
@@ -410,60 +610,49 @@ async function attachEmbySub() {
   } catch (e) { player.log(`字幕加载失败: ${e.message}`, 'warn'); }
 }
 
-function paintGain() {
-  const el = $('#gainNote');
-  if (!el || !volume.ok) return;
-  if (!volume.engaged) { el.textContent = '原始音量（未增益）'; return; }
+function gainNote() {
+  if (!volume.engaged) return '原始音量（未增益）';
   const m = volume.measuredDbfs;
-  el.textContent = m == null ? '测量中…' : `节目 ${m.toFixed(1)} dBFS · 已提升 ${volume.appliedDb.toFixed(1)} dB`;
+  return m == null ? '测量中…' : `节目 ${m.toFixed(1)} dBFS · 已提升 ${volume.appliedDb.toFixed(1)} dB`;
 }
-setInterval(paintGain, 1000);
+// The reading changes as the loudness measurement settles, but repainting the
+// menu under an open <select> would close it, so only the panel that shows it
+// is refreshed.
+setInterval(() => { if (menu.open === 'gain') paintMenu(); }, 1000);
 
 async function applySubtitle(idx) {
-  const sel = $('#subSel');
-  if (sel) { sel.disabled = true; sel.value = String(idx); }
+  CHOICE.sub = idx;
+  paintMenu();
   try {
     const started = await subs.select(idx);
-    if (idx >= 0 && !started) { player.log('该字幕格式没有渲染器，未开启', 'warn'); if (sel) sel.value = '-1'; }
+    if (idx >= 0 && !started) { player.log('该字幕格式没有渲染器，未开启', 'warn'); CHOICE.sub = -1; }
     else if (idx >= 0) player.log(`字幕已开启: ${info.subtitles[idx].label}`);
   } catch (err) {
     player.log(`字幕开启失败: ${err.message}`, 'error');
-    if (sel) sel.value = '-1';
-  } finally { if (sel) sel.disabled = false; }
+    CHOICE.sub = -1;
+  } finally { paintMenu(); }
 }
 
 /** Turn the Anime4K upscaler on/off. One path for the dropdown and start(). */
 async function applyAnime4K(mode) {
   a4kMode = mode;
-  const sel = $('#a4kSel');
-  if (sel) sel.disabled = true;
   try {
     anime4k.stop();
-    if (mode !== 'off') {
-      const ok = await anime4k.start(mode);
-      if (!ok) { a4kMode = 'off'; if (sel) sel.value = 'off'; }
-    }
-  } finally { if (sel) sel.disabled = false; }
+    if (mode !== 'off' && !(await anime4k.start(mode))) a4kMode = 'off';
+  } finally { paintMenu(); }
 }
 
 async function start() {
   try {
-    const wanted = Number($('#subSel')?.value ?? -1);
+    const wanted = CHOICE.sub;
     await subs.destroy();
     anime4k.stop();
-    await player.play({
-      videoIndex: Number($('#videoSel')?.value ?? 0),
-      audioIndex: Number($('#audioSel')?.value ?? 0),
-    });
+    await player.play({ videoIndex: CHOICE.video, audioIndex: CHOICE.audio });
     await volume.resume().catch(() => {});
     await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
     if (wanted >= 0) await applySubtitle(wanted);
     if (a4kMode !== 'off' && Anime4K.supported && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
   } catch (e) { player.log(e.message, 'error'); console.error(e); }
-}
-
-for (const id of ['#videoSel', '#audioSel']) {
-  document.addEventListener('change', e => { if (e.target.matches(id)) start(); });
 }
 
 // ---- resume position ----------------------------------------------------
@@ -486,10 +675,8 @@ armResume(WANT.t);
 // track choices are re-seeded by render() exactly as on first load.
 let switching = false;
 async function switchLine(to) {
-  const sel = $('#lineSel');
   if (!EM || switching || !to || to === line) return;
   switching = true;
-  if (sel) sel.disabled = true;
   const at = video.currentTime;
   try {
     WANT.url = reline(WANT.url, line, to);
@@ -498,7 +685,7 @@ async function switchLine(to) {
     player.log(`切换线路 → ${LINES.find(l => l.url === to)?.name || to}`);
     armResume(at);
     await load(WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
-  } finally { switching = false; if ($('#lineSel')) $('#lineSel').disabled = false; }
+  } finally { switching = false; }
 }
 
 // ---- Emby session lifecycle: start / progress / stopped -----------------
@@ -533,7 +720,7 @@ video.addEventListener('ended', reportStopped);
 addEventListener('pagehide', reportStopped);
 
 // ---- in-frame controls (same as index.html) -----------------------------
-const stage = $('#stage'), vctl = $('#vctl'), seek = $('#seek');
+const vctl = $('#vctl'), seek = $('#seek');
 const clock = s => {
   if (!Number.isFinite(s) || s < 0) s = 0;
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
@@ -589,21 +776,26 @@ function syncVolume() {
 }
 video.addEventListener('volumechange', syncVolume);
 
-const menu = $('#picks'), gear = $('#gearBtn');
+const picks = $('#picks'), gear = $('#gearBtn');
+const closeMenu = () => { picks.hidden = true; gear.setAttribute('aria-expanded', 'false'); menu.open = null; };
 gear.addEventListener('click', e => {
   e.stopPropagation();
-  const open = menu.hidden;
-  menu.hidden = !open;
+  const open = picks.hidden;
+  picks.hidden = !open;
   gear.setAttribute('aria-expanded', String(open));
-  if (open) wake();
+  // Always reopen on the root list, never on whichever panel was last seen.
+  if (open) { menu.open = null; paintMenu(); wake(); }
 });
 document.addEventListener('click', e => {
-  if (!menu.hidden && !menu.contains(e.target) && e.target !== gear) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+  if (!picks.hidden && !picks.contains(e.target) && e.target !== gear) closeMenu();
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !menu.hidden) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+  // Escape steps out of a panel first, and only then shuts the menu -- the
+  // back arrow's keyboard twin.
+  if (e.key !== 'Escape' || picks.hidden) return;
+  if (menu.open) { menu.open = null; menu.render(); } else closeMenu();
 });
-const menuOpen = () => !menu.hidden;
+const menuOpen = () => !picks.hidden;
 
 document.addEventListener('fullscreenchange', () => { $('#fsBtn').innerHTML = document.fullscreenElement ? ICON_EXIT : ICON_FULL; });
 $('#fsBtn').addEventListener('click', () => {

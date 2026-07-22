@@ -1,0 +1,179 @@
+<!doctype html><meta charset="utf-8">
+<title>danmaku check</title>
+<style>
+  :root{--fg:#e8ecf1;--dim:#8a95a3;--faint:#5c6672;--acc:#4c9aff;--acc-dim:#2b5c99;--line:#232a33}
+  body{margin:0;background:#000;color:#fff;font:14px sans-serif}
+  #stage{position:relative;width:960px;height:540px;background:#123}
+  #stage canvas:not(.A4K){z-index:3}
+  .menu{position:absolute;bottom:8px;right:8px;background:rgba(20,24,30,.97);border:1px solid rgba(255,255,255,.12);border-radius:8px}
+</style>
+<div id="stage">
+  <video id="video" muted playsinline></video>
+  <div class="menu" id="picks"></div>
+</div>
+<pre id="out"></pre>
+<script type="module">
+// Headless check for the two new browser-only pieces: the danmaku layer really
+// paints comments onto a canvas, and the two-level settings menu really
+// navigates. Node cannot judge either -- "no exception thrown" is not evidence
+// that anything was drawn -- so this runs in a real browser and POSTs its
+// verdict to the dev server's /collect.
+import { DanmakuLayer, loadRenderer, parseAny, loadSettings, saveSettings, DEFAULTS, saveTrack, loadTrack, forgetTrack } from '../src/danmaku/index.js';
+import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
+
+const out = [];
+const ok = (name, cond, detail = '') => out.push((cond ? 'PASS  ' : 'FAIL  ') + name + (detail ? '  -> ' + detail : ''));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const send = () => fetch('/collect', { method: 'POST', body: out.join('\n') + '\n' }).catch(() => {});
+// A hang must still report what it got to, or the run says only "TIMEOUT".
+setTimeout(() => { out.push('WATCHDOG: stopped early', 'DMK CHECK DONE'); send(); }, 40000);
+addEventListener('error', e => { out.push('ERROR ' + e.message, 'DMK CHECK DONE'); send(); });
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() }));
+
+const XML = `<?xml version="1.0"?><i>${
+  Array.from({ length: 60 }, (_, i) =>
+    `<d p="${(i * 0.05).toFixed(2)},${[1, 4, 5][i % 3]},25,16711680,0,0,a,${i},10">弹幕测试 ${i}</d>`).join('')}</i>`;
+
+/** Opaque pixels on every canvas inside the stage -- the only proof of paint. */
+function painted(root) {
+  let n = 0;
+  for (const c of root.querySelectorAll('canvas')) {
+    if (!c.width || !c.height) continue;
+    const s = document.createElement('canvas');
+    s.width = c.width; s.height = c.height;
+    const g = s.getContext('2d', { willReadFrequently: true });
+    try { g.drawImage(c, 0, 0); } catch { continue; }
+    const d = g.getImageData(0, 0, s.width, s.height).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++;
+  }
+  return n;
+}
+
+const stage = document.getElementById('stage'), video = document.getElementById('video');
+
+try {
+  // ---- parsing ----
+  const list = parseAny(XML);
+  ok('XML parsed', list.length === 60, list.length + ' comments');
+
+  // ---- the renderer loads from vendor/ ----
+  await loadRenderer();                      // vendor/ relative to this page
+  ok('renderer loaded from vendor/', true);
+
+  // ---- a layer paints ----
+  // The renderer is in media mode: it only runs while the element is playing.
+  // A canvas capture stream is a real, playing MediaSource with an advancing
+  // currentTime and needs no codec, so it works headless.
+  const src = Object.assign(document.createElement('canvas'), { width: 32, height: 32 });
+  const sg = src.getContext('2d');
+  // A capture stream only produces frames when the canvas is actually drawn to;
+  // a static one leaves the element playing with a currentTime that never moves.
+  (function tick() { sg.fillStyle = `hsl(${performance.now() / 10 % 360} 80% 50%)`; sg.fillRect(0, 0, 32, 32); requestAnimationFrame(tick); })();
+  video.srcObject = src.captureStream(30);
+  await video.play();
+  await sleep(500);
+  ok('test media is playing', !video.paused && video.currentTime > 0, `t=${video.currentTime.toFixed(2)} readyState=${video.readyState}`);
+
+  const layer = new DanmakuLayer(video, stage);
+  const s = { ...DEFAULTS, on: true, limit: 0 };
+  layer.setComments(list, 'test.xml');
+  layer.apply(s);
+  ok('layer mounted under the subtitle canvases', getComputedStyle(layer.box).zIndex === '2', 'z-index=' + getComputedStyle(layer.box).zIndex);
+
+  await sleep(700);
+  const px = painted(stage);
+  const cv = stage.querySelector('.dmk canvas');
+  ok('comments are actually drawn', px > 200,
+    `${px} opaque px | canvas ${cv ? cv.width + 'x' + cv.height : 'none'} | t=${video.currentTime.toFixed(2)} | box ${layer.box.clientWidth}x${layer.box.clientHeight}`);
+
+  // Rebuilding while PAUSED must not rewind the comment stream. The library
+  // seeks to the playhead only when constructed on a playing element, and every
+  // settings change rebuilds -- and settings are exactly what you fiddle with
+  // while paused. Every comment in this track is in the first 3 seconds, so
+  // once the playhead is past them a correct rebuild draws nothing and a
+  // rewound one dumps all 60 on screen at once.
+  while (video.currentTime < 4.5) await sleep(200);
+  await sleep(600);                                  // let the last ones fly off
+  video.pause();
+  await sleep(80);
+  layer.apply({ ...s, opacity: 0.9 });
+  await video.play();
+  await sleep(500);
+  // Measured: ~875 px with the seek, ~43800 without it (the library keeps one
+  // comment before the playhead on purpose, so it is never exactly zero).
+  const after = painted(stage);
+  ok('a rebuild while paused does not replay the backlog', after < 5000,
+    after + ' opaque px at t=' + video.currentTime.toFixed(1) + 's (all comments end at 3s; a full replay measures ~43800)');
+
+  // ---- settings really change the layer ----
+  layer.apply({ ...s, opacity: 0.3, area: 0.5 });
+  ok('opacity applied to the layer', layer.box.style.opacity === '0.3', layer.box.style.opacity);
+  ok('display area applied', layer.box.style.height === '50%', layer.box.style.height);
+
+  // ---- off means gone ----
+  layer.apply({ ...s, on: false });
+  await sleep(100);
+  ok('turning it off removes the renderer', layer.dm === null && painted(stage) === 0, painted(stage) + ' px left');
+
+  // ---- per-second throttle actually thins ----
+  layer.apply({ ...s, on: true, limit: 5 });
+  ok('per-second cap thins the track', layer.shown < 60 && layer.shown > 0, layer.shown + ' of 60 kept');
+
+  // ---- blocklist ----
+  layer.apply({ ...s, on: true, limit: 0, block: ['测试 1'] });
+  ok('blocklist drops matching comments', layer.shown < 60, layer.shown + ' of 60 kept');
+
+  // ---- persistence ----
+  saveSettings({ ...DEFAULTS, on: true, fontSize: 33, api: 'https://dmk.example' });
+  const back = loadSettings();
+  ok('settings survive a reload', back.fontSize === 33 && back.api === 'https://dmk.example' && back.on === true);
+  ok('unknown keys fall back to defaults', back.speed === DEFAULTS.speed, 'speed=' + back.speed);
+
+  await saveTrack('emby:ITEM1', 'test.xml', list);
+  const track = await loadTrack('emby:ITEM1');
+  ok('the track itself survives in IndexedDB', track?.comments?.length === 60, (track?.comments?.length ?? 0) + ' comments back');
+  ok('and remembers where it came from', track?.name === 'test.xml', track?.name);
+  await forgetTrack('emby:ITEM1');
+  ok('clearing forgets it', (await loadTrack('emby:ITEM1')) === null);
+
+  // ---- the two-level menu ----
+  const root = document.getElementById('picks');
+  const menu = new SettingsMenu(root);
+  let picked = null;
+  menu.set([
+    { key: 'track', label: '轨道', value: '中文字幕', rows: [
+      { type: 'select', id: 'sub', label: '字幕', value: 1, options: [{ value: 0, label: '关闭' }, { value: 1, label: '中文' }], onChange: v => { picked = v; } }] },
+    { key: 'dmk', label: '弹幕', value: '60 条', rows: [
+      { type: 'toggle', id: 'on', label: '显示弹幕', value: true, onChange: v => { picked = 'toggle:' + v; } },
+      { type: 'range', id: 'op', label: '不透明度', hint: '85%', min: 0, max: 1, step: 0.05, value: 0.85, onInput: v => { picked = 'op:' + v; } }] },
+  ]);
+  const rows = root.querySelectorAll('.mrow[data-group]');
+  ok('root shows one row per group', rows.length === 2, [...rows].map(r => r.textContent.replace(/\s+/g, ' ').trim()).join(' | '));
+  ok('root rows show the current value', root.textContent.includes('中文字幕') && root.textContent.includes('60 条'));
+  ok('root has no controls of its own', root.querySelectorAll('select,input').length === 0, 'the tall-column bug');
+
+  root.querySelector('[data-group="dmk"]').click();
+  ok('opening a group shows its panel', root.querySelectorAll('[data-group]').length === 0 && !!root.querySelector('[data-back]'));
+  ok('panel shows that group\'s controls', root.querySelectorAll('input').length === 2, root.querySelectorAll('input').length + ' inputs');
+
+  const range = root.querySelector('input[type=range]');
+  range.value = '0.4'; range.dispatchEvent(new Event('input', { bubbles: true }));
+  ok('a range change reaches the handler', picked === 'op:0.4', String(picked));
+  const cb = root.querySelector('input[type=checkbox]');
+  cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
+  ok('a toggle reaches the handler as a boolean', picked === 'toggle:false', String(picked));
+
+  root.querySelector('[data-back]').click();
+  ok('back returns to the root list', root.querySelectorAll('.mrow[data-group]').length === 2);
+
+  root.querySelector('[data-group="track"]').click();
+  const sel = root.querySelector('select');
+  sel.value = '0'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+  ok('a select in another panel reaches its own handler', picked === '0', String(picked));
+} catch (e) {
+  out.push('ERROR ' + e.message + '\n' + (e.stack || '').split('\n').slice(0, 3).join('\n'));
+}
+out.push('DMK CHECK DONE');
+document.getElementById('out').textContent = out.join('\n');
+send();
+</script>

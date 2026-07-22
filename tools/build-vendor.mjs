@@ -44,6 +44,12 @@ for (const f of ['libpgs.js', 'libpgs.worker.js']) {
   copyFileSync(`node_modules/libpgs/dist/${f}`, `${OUT}/${f}`);
 }
 
+// danmaku (MIT, no dependencies): the flying-comment renderer. The published
+// ESM build is already a single self-contained file with no bare imports, so
+// it is copied, not bundled. The full build carries both engines; we drive the
+// canvas one (thousands of comments an episode is too many DOM nodes).
+copyFileSync('node_modules/danmaku/dist/esm/danmaku.min.js', `${OUT}/danmaku.js`);
+
 // anime4k-webgpu (MIT): optional SDR-only GPU upscaler for anime. It ships as a
 // webpack CJS bundle whose exports are attached via Object.defineProperty, which
 // esbuild cannot hoist into ES named bindings -- so src/video/anime4k.js imports

@@ -9,13 +9,14 @@
     "samples": "node tools/make-samples.mjs",
     "build": "node tools/build-vendor.mjs && node tools/build-site.mjs",
     "deploy": "node tools/deploy.mjs",
-    "test": "node tools/test-demux.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs && node --experimental-webstorage --localstorage-file=.linweb-test-ls --no-warnings tools/test-emby.mjs"
+    "test": "node tools/test-demux.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs && node tools/test-danmaku.mjs && node --experimental-webstorage --localstorage-file=.linweb-test-ls --no-warnings tools/test-emby.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "anime4k-webgpu": "^1.0.0",
+    "danmaku": "^2.0.9",
     "jassub": "^2.5.7",
     "libav.js": "^6.9.8",
     "libpgs": "^0.8.1"
