@@ -160,10 +160,21 @@ export class EmbyClient {
   // ---- images (no extra request: tags come on the item) --------------------
   imageUrl(item, type = 'Primary', { maxWidth = 400, maxHeight, quality = 90 } = {}) {
     if (!item) return null;
-    const id = type === 'Primary' && item.Type === 'Episode' && item.SeriesPrimaryImageTag ? item.SeriesId : item.Id;
-    const tag = type === 'Primary'
-      ? (item.ImageTags?.Primary || (item.Type === 'Episode' ? item.SeriesPrimaryImageTag : null))
-      : (item.BackdropImageTags?.[0] || item.ImageTags?.[type]);
+    // id and tag MUST come from the same entity. The old code chose them
+    // separately: any Episode whose series had a poster got the series' id,
+    // but the tag still preferred the episode's OWN Primary tag -- a series-id
+    // + episode-tag URL Emby can't resolve, so an episode that genuinely had a
+    // cover (e.g. Emby's auto-generated thumbnail) rendered blank. Pair them:
+    // the item's own image first, the series poster only as a fallback.
+    let id = item.Id, tag;
+    if (type === 'Primary') {
+      if (item.ImageTags?.Primary) tag = item.ImageTags.Primary;                 // this item's own cover
+      else if (item.Type === 'Episode' && item.SeriesPrimaryImageTag) {          // no own cover -> series poster
+        id = item.SeriesId; tag = item.SeriesPrimaryImageTag;
+      }
+    } else {
+      tag = item.BackdropImageTags?.[0] || item.ImageTags?.[type];
+    }
     if (!tag) return null;
     const p = new URLSearchParams({ tag, quality: String(quality), maxWidth: String(maxWidth) });
     if (maxHeight) p.set('maxHeight', String(maxHeight));
@@ -202,6 +213,18 @@ export class EmbyClient {
     return `${this.server}/Videos/${itemId}/stream${container}?${p}`;
   }
 
+  // Ask the server to extract/convert a subtitle stream to SRT so the browser's
+  // own <track> can draw it. Used for the two cases the in-browser renderers do
+  // NOT cover: an external (sidecar) subtitle, and an EMBEDDED text subtitle
+  // (S_TEXT/UTF8 etc.) — Subtitles only renders ass/ssa/pgs, so text subs would
+  // otherwise silently show nothing. ASS/PGS are still demuxed and drawn client-
+  // side (effects, embedded fonts, HDR-safe), never routed here.
+  subtitleUrl(itemId, source, stream, format = 'srt') {
+    const p = new URLSearchParams();
+    if (this.token) p.set('api_key', this.token);
+    return `${this.server}/Videos/${itemId}/${source?.Id || itemId}/Subtitles/${stream.Index}/Stream.${format}?${p}`;
+  }
+
   // ---- progress (best-effort: never let a report break playback) -----------
   reportStart(itemId, source, playSessionId) {
     return this._post('/Sessions/Playing', { ItemId: itemId, MediaSourceId: source?.Id, PlaySessionId: playSessionId, PlayMethod: 'DirectStream', CanSeek: true }).catch(() => {});
@@ -215,6 +238,23 @@ export class EmbyClient {
 }
 
 // ---- small shared helpers the UI needs -------------------------------------
+
+// Decide how a chosen Emby subtitle stream reaches the screen:
+//   'client'      -> demux from the container, draw in-browser (ass/ssa via
+//                    JASSUB, pgs via libpgs). Keeps effects + embedded fonts,
+//                    no server transcode. Only for EMBEDDED ass/ssa/pgs.
+//   'text'        -> have Emby serve it as SRT into the browser's <track>. For
+//                    external subs and embedded text subs (which have no
+//                    in-browser renderer).
+//   'unsupported' -> an external bitmap sub (external pgs/vobsub); no clean path.
+export function subtitleDelivery(stream) {
+  const codec = (stream?.Codec || '').toLowerCase();
+  const bitmap = /pgs|vobsub|dvbsub|dvb_subtitle|dvd_subtitle/.test(codec);
+  if (!stream?.IsExternal && /ass|ssa|pgs/.test(codec)) return 'client';
+  if (!bitmap) return 'text';
+  return 'unsupported';
+}
+
 export const ticksToSec = t => (t || 0) / 1e7;
 export const fmtRuntime = ticks => {
   const s = ticksToSec(ticks); if (!s) return '';

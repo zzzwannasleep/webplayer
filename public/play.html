@@ -1,0 +1,563 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LinWeb · 播放</title>
+<!--
+  The dedicated Emby player. emby.html resolves a DIRECT stream URL and hands it
+  here with the item id, session, resume position, and the audio + subtitle the
+  viewer picked in the detail page. This page owns the whole playback session:
+  it reports start / progress / stopped back to Emby (so resume works both ways),
+  pre-selects the chosen audio track, and pre-enables the chosen subtitle -- ass/
+  pgs drawn in-browser, text subs served by Emby into a native <track>. The MSE
+  engine, subtitle renderers and in-frame controls are the same ones index.html
+  uses; only the chrome and the Emby glue differ.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#0a0c0f; --panel:#12161b; --panel-2:#171c22; --line:#232a33;
+    --fg:#e8ecf1; --dim:#8a95a3; --faint:#5c6672;
+    --acc:#4c9aff; --acc-dim:#2b5c99;
+    --ok:#5fd68a; --warn:#f0b429; --err:#ff6b63; --dv:#f5c451;
+    --r:8px;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.55 ui-sans-serif,system-ui,"Segoe UI",-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button, input, select { font:inherit; color:inherit; }
+
+  header {
+    display:flex; align-items:center; gap:14px;
+    padding:12px 20px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#12161b,#0f1317);
+  }
+  .btn {
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:7px 13px; cursor:pointer; transition:.14s; white-space:nowrap; text-decoration:none;
+  }
+  .btn:hover { border-color:var(--acc-dim); background:#1c232b; }
+  .btn.ghost { background:transparent; color:var(--dim); }
+  .btn.ghost:hover { color:var(--fg); }
+  .title { font-weight:600; letter-spacing:-.01em; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .spacer { flex:1; }
+
+  main { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:18px; padding:18px 20px 28px; align-items:start; }
+  @media (max-width:960px) { main { grid-template-columns:minmax(0,1fr); } }
+
+  #stage {
+    position:relative; background:#000; border-radius:var(--r);
+    overflow:hidden; aspect-ratio:16/9; border:1px solid var(--line);
+  }
+  video { width:100%; height:100%; display:block; background:#000; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  /* Edge composites JASSUB's worker OffscreenCanvas as an opaque quad windowed;
+     `screen` forces it to blend with the video. Honoured differently in
+     fullscreen, so dropped there. Scoped to .JASSUB (PGS is a 2D canvas). */
+  #stage canvas.JASSUB { mix-blend-mode: screen; }
+  #stage:fullscreen canvas.JASSUB { mix-blend-mode: normal; }
+  video::cue { background:rgba(0,0,0,.55); color:#fff; }
+
+  .placeholder {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; color:var(--faint);
+    text-align:center; padding:24px; pointer-events:none;
+  }
+  .placeholder svg { width:40px; height:40px; opacity:.5; }
+  .placeholder b { color:var(--dim); font-weight:500; }
+
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 14px; }
+  .card > h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint); margin:0 0 10px; font-weight:650; }
+
+  .kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 12px; font-size:13px; margin:0; }
+  .kv dt { color:var(--faint); }
+  .kv dd { margin:0; font-variant-numeric:tabular-nums; min-width:0; overflow-wrap:anywhere; }
+
+  .badges { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:11px; }
+  .badge { padding:2px 8px; border-radius:4px; font-size:10.5px; font-weight:650; letter-spacing:.03em; }
+  .b-hdr { background:#12351f; color:var(--ok); }
+  .b-dv  { background:#3a2c12; color:var(--dv); }
+  .b-warn{ background:#3a1614; color:var(--err); }
+  .b-ok  { background:#14283c; color:#7ab8ff; }
+
+  .note { margin-top:9px; font-size:12px; line-height:1.5; color:var(--dim); }
+  .empty { color:var(--faint); font-size:12.5px; }
+
+  details.log summary {
+    cursor:pointer; list-style:none; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--faint); font-weight:650; display:flex;
+    align-items:center; justify-content:space-between;
+  }
+  details.log summary::-webkit-details-marker { display:none; }
+  details.log summary::after { content:'▾'; transition:.15s; }
+  details.log[open] summary::after { transform:rotate(180deg); }
+  #log { font:11px/1.5 ui-monospace,Consolas,monospace; max-height:220px; overflow:auto; white-space:pre-wrap; color:var(--dim); margin-top:9px; overflow-wrap:anywhere; }
+  #log .error { color:var(--err); } #log .warn { color:var(--warn); }
+  #log time { color:var(--faint); margin-right:6px; }
+
+  /* in-frame controls: same proportions as index.html */
+  .vctl {
+    position:absolute; left:0; right:0; bottom:0; z-index:4;
+    display:flex; flex-direction:column; gap:2px; padding:26px 12px 8px;
+    background:linear-gradient(180deg, transparent, rgba(0,0,0,.78));
+    color:#fff; opacity:1; transition:opacity .25s ease;
+  }
+  #stage.idle .vctl { opacity:0; pointer-events:none; }
+  #stage.idle { cursor:none; }
+  .vrow { display:flex; align-items:center; gap:4px; }
+  .vspacer { flex:1; }
+  .vbtn {
+    width:40px; height:40px; padding:8px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:transparent; border:0; border-radius:6px; cursor:pointer;
+    color:#fff; transition:background .15s, opacity .15s;
+  }
+  .vbtn:hover { background:rgba(255,255,255,.13); }
+  .vbtn:active { opacity:.65; }
+  .vbtn svg { width:22px; height:22px; display:block; }
+  .vbtn:focus-visible, .seek:focus-visible, .vol:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+  .seek { height:16px; display:flex; align-items:center; cursor:pointer; padding:0 2px; }
+  .seek-rail { position:relative; width:100%; height:5px; border-radius:3px; background:rgba(255,255,255,.26); transition:height .12s ease; }
+  .seek:hover .seek-rail, .seek:focus-visible .seek-rail { height:7px; }
+  .seek-buf, .seek-fill { position:absolute; left:0; top:0; height:100%; border-radius:3px; }
+  .seek-buf  { background:rgba(255,255,255,.28); width:0; }
+  .seek-fill { background:var(--acc); width:0; }
+  .seek-fill::after { content:''; position:absolute; right:-6px; top:50%; transform:translateY(-50%); width:12px; height:12px; border-radius:50%; background:#fff; opacity:0; transition:opacity .12s; }
+  .seek:hover .seek-fill::after, .seek:focus-visible .seek-fill::after { opacity:1; }
+  .volume { display:flex; align-items:center; }
+  .vol { width:0; opacity:0; height:4px; margin-left:0; accent-color:var(--acc); cursor:pointer; transition:width .18s ease, opacity .18s ease, margin-left .18s ease; }
+  .volume:hover .vol, .vol:focus-visible { width:62px; opacity:1; margin-left:6px; margin-right:6px; }
+  .vtime { font:12.5px/1 ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums; padding:0 8px; white-space:nowrap; opacity:.95; }
+  .vtime i { opacity:.45; font-style:normal; margin:0 2px; }
+  .menu-wrap { position:relative; }
+  .menu {
+    position:absolute; bottom:calc(100% + 8px); right:0; min-width:230px;
+    background:rgba(20,24,30,.97); border:1px solid rgba(255,255,255,.12);
+    border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5);
+    padding:8px; display:flex; flex-direction:column; gap:8px; z-index:10;
+  }
+  .menu[hidden] { display:none; }
+  .menu-row { display:flex; flex-direction:column; gap:4px; }
+  .menu-note { font-size:11px; color:var(--faint); margin-top:-4px; font-variant-numeric:tabular-nums; }
+  .menu-row > span { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--faint); font-weight:650; }
+  .menu select { width:100%; background:#0c1014; color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:6px 8px; font-size:13px; }
+  .menu select:hover { border-color:var(--acc-dim); }
+  .menu select:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  #stage:fullscreen { border-radius:0; border:0; aspect-ratio:auto; width:100vw; height:100vh; }
+  #stage:fullscreen video { object-fit:contain; }
+</style>
+
+<header>
+  <a class="btn ghost" href="./emby.html">← 媒体库</a>
+  <div class="title" id="title">播放</div>
+  <div class="spacer"></div>
+</header>
+
+<main>
+  <div>
+    <div id="stage">
+      <video id="video" playsinline></video>
+      <div class="vctl" id="vctl" hidden>
+        <div class="seek" id="seek" role="slider" tabindex="0" aria-label="进度" aria-valuemin="0" aria-valuenow="0">
+          <div class="seek-rail"><div class="seek-buf" id="seekBuf"></div><div class="seek-fill" id="seekFill"></div></div>
+        </div>
+        <div class="vrow">
+          <button class="vbtn" id="ppBtn" aria-label="播放/暂停"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></button>
+          <div class="volume">
+            <button class="vbtn" id="muteBtn" aria-label="静音"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg></button>
+            <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
+          </div>
+          <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
+          <div class="vspacer"></div>
+          <div class="menu-wrap">
+            <button class="vbtn" id="gearBtn" aria-label="轨道设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <div class="menu" id="picks" role="menu" hidden></div>
+          </div>
+          <button class="vbtn" id="fsBtn" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+        </div>
+      </div>
+      <div class="placeholder" id="placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+        <b id="phText">正在解析…</b>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2>来源</h2>
+      <div id="meta" class="empty">读取中…</div>
+    </div>
+    <details class="card log" id="logCard">
+      <summary>日志</summary>
+      <div id="log"></div>
+    </details>
+  </aside>
+</main>
+
+<script type="module">
+import { Player } from '../src/player.js';
+import { Subtitles, attachSrt } from '../src/subs/index.js';
+import { VolumeStage } from '../src/audio/gain.js';
+import { EmbyClient } from '../src/emby/client.js';
+
+const $ = s => document.querySelector(s);
+const video = $('#video');
+const player = new Player(video);
+const subs = new Subtitles(player, { log: (m, l) => player.log(m, l) });
+const volume = new VolumeStage(video, { log: (m, l) => player.log(m, l) });
+
+const logEl = $('#log');
+player.log = (msg, level = 'info') => {
+  const line = document.createElement('div');
+  line.className = level;
+  const t = document.createElement('time');
+  t.textContent = new Date().toLocaleTimeString('en-GB');
+  line.append(t, msg);
+  logEl.append(line);
+  logEl.scrollTop = logEl.scrollHeight;
+  if (level === 'error') $('#logCard').open = true;
+};
+
+const fmtBytes = n => n > 1e9 ? `${(n / 2 ** 30).toFixed(2)} GB` : `${(n / 2 ** 20).toFixed(1)} MB`;
+const fmtTime = s => {
+  if (!Number.isFinite(s) || s <= 0) return '未知';
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+};
+
+// ---- what emby.html handed us -------------------------------------------
+const P = new URLSearchParams(location.search);
+const WANT = {
+  url: P.get('url'),
+  title: P.get('title') || '播放',
+  id: P.get('id'), src: P.get('src'), ps: P.get('ps'),
+  size: Number(P.get('size')) || 0,
+  t: Number(P.get('t')) || 0,
+  aud: P.has('aud') ? Number(P.get('aud')) : 0, audlang: P.get('audlang') || '',
+  sub: P.has('sub') ? Number(P.get('sub')) : null, sublang: P.get('sublang') || '',
+  suburl: P.get('suburl'), sublabel: P.get('sublabel') || '字幕',
+  subwarn: P.get('subwarn'),
+};
+$('#title').textContent = WANT.title;
+document.title = `LinWeb · ${WANT.title}`;
+
+// The live Emby session, rebuilt from localStorage, so this page can report
+// progress back. Null if the user reached play.html without logging in.
+const EM = EmbyClient.restore();
+const srcRef = { Id: WANT.src };
+
+let info = null;
+
+async function load(input) {
+  try {
+    await subs.destroy();
+    volume.restart();
+    info = await player.load(input);
+    render();
+  } catch (e) {
+    info = null;
+    $('#phText').innerHTML = explain(e, input);
+    player.log(e.message, 'error');
+    console.error(e);
+  }
+}
+
+function explain(e, input) {
+  // http video URL on a https page = mixed content, blocked before any request.
+  // The direct stream URL from a local http Emby trips this constantly.
+  const inUrl = typeof input === 'string' ? input : input?.url;
+  if (typeof inUrl === 'string' && location.protocol === 'https:' && /^http:\/\//i.test(inUrl))
+    return '混合内容被拦截：本页是 HTTPS，视频地址是 http://，浏览器直接禁止读取（不是 CORS）。请让 Emby 走 https，或用 http 打开 LinWeb，或加一层 https 反代。';
+  if (/does not support Range/i.test(e.message)) return '服务器未开放 Range 请求，无法 seek。';
+  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) return '无法读取该地址——跨域需服务器放行 CORS 与 Range；自签 https 还需证书受信。';
+  return e.message;
+}
+
+function render() {
+  $('#placeholder').style.display = 'none';
+
+  const badges = [];
+  if (info.hdr) badges.push(`<span class="badge b-hdr">HDR ${info.hdr.transfer}</span>`);
+  if (info.dynamicHdr) badges.push(`<span class="badge b-hdr">${info.hdr10plus ? 'HDR10+' : 'HDR Vivid'}</span>`);
+  if (info.dolbyVision) badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
+  if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
+
+  $('#meta').innerHTML = `
+    <div class="badges">${badges.join('')}</div>
+    <dl class="kv">
+      <dt>大小</dt><dd>${fmtBytes(info.size)}</dd>
+      <dt>时长</dt><dd>${fmtTime(info.duration)}</dd>
+      ${info.hdr ? `<dt>色彩</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
+      ${info.fonts ? `<dt>字体</dt><dd>${info.fonts} 个内嵌</dd>` : ''}
+    </dl>`;
+
+  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
+    ? `<div class="menu-row"><span>${label}</span><select id="${id}" aria-label="${label}">${(extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
+    : '';
+
+  $('#picks').innerHTML =
+    field('视频', 'videoSel', info.video,
+      (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
+    field('音频', 'audioSel', info.audio,
+      (x, i) => `<option value="${i}">${x.label}${x.supported ? '' : ` — ${x.note?.name || '软解'}`}</option>`) +
+    field('字幕', 'subSel', info.subtitles,
+      (x, i) => {
+        const ok = Subtitles.SUPPORTED.has(x.format);
+        return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : ' ✕ 无渲染器'}</option>`;
+      }, '<option value="-1">关闭</option>')
+    + (volume.ok ? `<div class="menu-row"><span>响度</span><select id="gainSel" aria-label="响度">
+         <option value="1">原始音量</option><option value="auto">自动增益</option>
+         <option value="1.5">+3.5 dB</option><option value="2">+6 dB</option><option value="3">+9.5 dB</option>
+       </select></div><div class="menu-note" id="gainNote"></div>` : '');
+
+  $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
+  $('#gainSel')?.addEventListener('change', e => {
+    const v = e.target.value;
+    if (v === 'auto') { volume.setAuto(true); volume.boost = 1; }
+    else { volume.setAuto(false); volume.boost = Number(v); }
+    paintGain();
+  });
+  paintGain();
+
+  // Honour the detail-page picks BEFORE start() reads the selects.
+  seedChoice();
+
+  if (info.video.some(v => v.supported)) start();
+  else player.log('没有可播放的视频轨', 'error');
+}
+
+// Positional first (the Emby stream list and the demuxed track list are both the
+// container's tracks in order, so index N maps to index N); language only
+// rescues an out-of-range index.
+function pick(list, idx, lang) {
+  if (idx != null && idx >= 0 && idx < list.length) return idx;
+  if (lang) { const i = list.findIndex(x => (x.track.language || '').toLowerCase() === lang.toLowerCase()); if (i >= 0) return i; }
+  return 0;
+}
+
+function seedChoice() {
+  const aSel = $('#audioSel');
+  if (aSel) aSel.value = String(pick(info.audio, WANT.aud, WANT.audlang));
+
+  const sSel = $('#subSel');
+  if (WANT.subwarn) player.log(`所选字幕为图形格式，浏览器暂无法外挂渲染：${WANT.subwarn}`, 'warn');
+  if (WANT.suburl) {
+    if (sSel) sSel.value = '-1';   // client renderer unused; Emby serves it as a <track>
+    attachEmbySub();
+  } else if (WANT.sub != null && sSel) {
+    sSel.value = String(pick(info.subtitles, WANT.sub, WANT.sublang));
+  }
+}
+
+// External / text subtitle: Emby serves it as SRT, drawn by the browser's own
+// <track>. The <track> is a DOM child of <video>, so it survives the src swap
+// each play() does; its mode is re-asserted on every metadata load.
+let extTrack = null;
+async function attachEmbySub() {
+  try {
+    const srt = await fetch(WANT.suburl).then(r => { if (!r.ok) throw new Error('字幕 ' + r.status); return r.text(); });
+    extTrack = attachSrt(video, srt, { label: WANT.sublabel, language: WANT.sublang || 'und', asDefault: true });
+    video.addEventListener('loadedmetadata', () => { if (extTrack) extTrack.track.mode = 'showing'; });
+    player.log(`字幕已开启（Emby 提供）: ${WANT.sublabel}`);
+  } catch (e) { player.log(`字幕加载失败: ${e.message}`, 'warn'); }
+}
+
+function paintGain() {
+  const el = $('#gainNote');
+  if (!el || !volume.ok) return;
+  if (!volume.engaged) { el.textContent = '原始音量（未增益）'; return; }
+  const m = volume.measuredDbfs;
+  el.textContent = m == null ? '测量中…' : `节目 ${m.toFixed(1)} dBFS · 已提升 ${volume.appliedDb.toFixed(1)} dB`;
+}
+setInterval(paintGain, 1000);
+
+async function applySubtitle(idx) {
+  const sel = $('#subSel');
+  if (sel) { sel.disabled = true; sel.value = String(idx); }
+  try {
+    const started = await subs.select(idx);
+    if (idx >= 0 && !started) { player.log('该字幕格式没有渲染器，未开启', 'warn'); if (sel) sel.value = '-1'; }
+    else if (idx >= 0) player.log(`字幕已开启: ${info.subtitles[idx].label}`);
+  } catch (err) {
+    player.log(`字幕开启失败: ${err.message}`, 'error');
+    if (sel) sel.value = '-1';
+  } finally { if (sel) sel.disabled = false; }
+}
+
+async function start() {
+  try {
+    const wanted = Number($('#subSel')?.value ?? -1);
+    await subs.destroy();
+    await player.play({
+      videoIndex: Number($('#videoSel')?.value ?? 0),
+      audioIndex: Number($('#audioSel')?.value ?? 0),
+    });
+    await volume.resume().catch(() => {});
+    await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
+    if (wanted >= 0) await applySubtitle(wanted);
+  } catch (e) { player.log(e.message, 'error'); console.error(e); }
+}
+
+for (const id of ['#videoSel', '#audioSel']) {
+  document.addEventListener('change', e => { if (e.target.matches(id)) start(); });
+}
+
+// ---- resume position ----------------------------------------------------
+if (WANT.t) {
+  const seekOnce = () => {
+    video.removeEventListener('loadeddata', seekOnce);
+    if (Number.isFinite(video.duration) && WANT.t < video.duration) { try { video.currentTime = WANT.t; } catch {} }
+  };
+  video.addEventListener('loadeddata', seekOnce);
+}
+
+// ---- Emby session lifecycle: start / progress / stopped -----------------
+// Wiring the two calls that emby.html defined but never made. Now the server
+// learns the playhead as it moves, so "continue watching" and cross-device
+// resume actually reflect this session. All best-effort; a failed report never
+// touches playback (the client swallows errors).
+let reported = false;
+function reportStart() {
+  if (reported || !EM || !WANT.id) return;
+  reported = true;
+  EM.reportStart(WANT.id, srcRef, WANT.ps);
+}
+const flushProgress = () => { if (EM && WANT.id) EM.reportProgress(WANT.id, srcRef, WANT.ps, video.currentTime, video.paused); };
+video.addEventListener('playing', reportStart);
+video.addEventListener('play', () => { reportStart(); flushProgress(); });
+video.addEventListener('pause', flushProgress);
+video.addEventListener('seeked', flushProgress);
+// Emby's own web client reports every ~10s; matching that keeps the timeline
+// fresh without hammering the server.
+setInterval(() => { if (!video.paused) flushProgress(); }, 10000);
+
+let stopped = false;
+function reportStopped() {
+  if (stopped || !EM || !WANT.id) return;
+  stopped = true;
+  EM.reportStopped(WANT.id, srcRef, WANT.ps, video.currentTime);
+}
+video.addEventListener('ended', reportStopped);
+// pagehide covers navigation, tab close and back-button; more reliable than
+// unload, which does not fire on mobile.
+addEventListener('pagehide', reportStopped);
+
+// ---- in-frame controls (same as index.html) -----------------------------
+const stage = $('#stage'), vctl = $('#vctl'), seek = $('#seek');
+const clock = s => {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+};
+function paintProgress() {
+  const d = video.duration;
+  if (!Number.isFinite(d) || d <= 0) return;
+  $('#seekFill').style.width = `${(video.currentTime / d) * 100}%`;
+  const b = video.buffered;
+  let end = 0;
+  for (let i = 0; i < b.length; i++) if (video.currentTime >= b.start(i) - 0.5 && video.currentTime <= b.end(i)) end = b.end(i);
+  $('#seekBuf').style.width = `${Math.min(100, (end / d) * 100)}%`;
+  $('#tNow').textContent = clock(video.currentTime);
+  $('#tEnd').textContent = clock(d);
+  seek.setAttribute('aria-valuenow', String(Math.round(video.currentTime)));
+  seek.setAttribute('aria-valuemax', String(Math.round(d)));
+  seek.setAttribute('aria-valuetext', `${clock(video.currentTime)} / ${clock(d)}`);
+}
+const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
+$('#ppBtn').addEventListener('click', togglePlay);
+video.addEventListener('click', togglePlay);
+const ICON_PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 14 9-14 9z"/></svg>`, ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+const ICON_VOL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg>`, ICON_MUTE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`;
+const ICON_FULL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`, ICON_EXIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`;
+video.addEventListener('play', () => { $('#ppBtn').innerHTML = ICON_PAUSE; });
+video.addEventListener('pause', () => { $('#ppBtn').innerHTML = ICON_PLAY; });
+video.addEventListener('timeupdate', paintProgress);
+video.addEventListener('progress', paintProgress);
+video.addEventListener('loadedmetadata', () => { vctl.hidden = false; paintProgress(); });
+
+const seekToClientX = x => {
+  const r = seek.getBoundingClientRect();
+  const d = video.duration;
+  if (Number.isFinite(d) && d > 0) video.currentTime = Math.max(0, Math.min(d, ((x - r.left) / r.width) * d));
+};
+let scrubbing = false;
+seek.addEventListener('pointerdown', e => { scrubbing = true; seek.setPointerCapture(e.pointerId); seekToClientX(e.clientX); });
+seek.addEventListener('pointermove', e => { if (scrubbing) seekToClientX(e.clientX); });
+seek.addEventListener('pointerup', e => { scrubbing = false; seek.releasePointerCapture(e.pointerId); });
+
+$('#muteBtn').addEventListener('click', () => { video.muted = !video.muted; syncVolume(); });
+$('#vol').addEventListener('input', e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; syncVolume(); });
+function syncVolume() {
+  $('#muteBtn').innerHTML = video.muted || video.volume === 0 ? ICON_MUTE : ICON_VOL;
+  $('#vol').value = String(video.muted ? 0 : video.volume);
+}
+video.addEventListener('volumechange', syncVolume);
+
+const menu = $('#picks'), gear = $('#gearBtn');
+gear.addEventListener('click', e => {
+  e.stopPropagation();
+  const open = menu.hidden;
+  menu.hidden = !open;
+  gear.setAttribute('aria-expanded', String(open));
+  if (open) wake();
+});
+document.addEventListener('click', e => {
+  if (!menu.hidden && !menu.contains(e.target) && e.target !== gear) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !menu.hidden) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+});
+const menuOpen = () => !menu.hidden;
+
+document.addEventListener('fullscreenchange', () => { $('#fsBtn').innerHTML = document.fullscreenElement ? ICON_EXIT : ICON_FULL; });
+$('#fsBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen().catch(e => player.log(`全屏失败: ${e.message}`, 'warn'));
+});
+
+let idleTimer = null;
+const wake = () => {
+  stage.classList.remove('idle');
+  clearTimeout(idleTimer);
+  if (!video.paused && !menuOpen()) idleTimer = setTimeout(() => stage.classList.add('idle'), 3000);
+};
+stage.addEventListener('pointermove', wake);
+stage.addEventListener('pointerleave', () => { if (!video.paused && !menuOpen()) stage.classList.add('idle'); });
+video.addEventListener('pause', wake);
+video.addEventListener('play', wake);
+
+addEventListener('keydown', e => {
+  const t = e.target;
+  if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
+  const d = video.duration;
+  switch (e.key) {
+    case ' ': case 'k': e.preventDefault(); togglePlay(); break;
+    case 'ArrowRight': e.preventDefault(); if (Number.isFinite(d)) video.currentTime = Math.min(d, video.currentTime + 5); break;
+    case 'ArrowLeft': e.preventDefault(); video.currentTime = Math.max(0, video.currentTime - 5); break;
+    case 'ArrowUp': e.preventDefault(); video.volume = Math.min(1, video.volume + 0.05); break;
+    case 'ArrowDown': e.preventDefault(); video.volume = Math.max(0, video.volume - 0.05); break;
+    case 'm': video.muted = !video.muted; break;
+    case 'f': $('#fsBtn').click(); break;
+    default: return;
+  }
+  wake();
+});
+syncVolume();
+
+video.addEventListener('error', () => {
+  const e = video.error;
+  if (e) player.log(`<video> 错误 ${e.code}: ${e.message || '(无信息)'}`, 'error');
+});
+
+// ---- go ------------------------------------------------------------------
+if (WANT.url) load(WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+else { $('#phText').textContent = '缺少播放地址，请从媒体库重新进入。'; }
+
+window.player = player;
+window.subs = subs;
+</script>

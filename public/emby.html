@@ -286,7 +286,7 @@
 <div id="toast"></div>
 
 <script type="module">
-import { EmbyClient, fmtRuntime, ticksToSec, progressOf } from '../src/emby/client.js';
+import { EmbyClient, fmtRuntime, ticksToSec, progressOf, subtitleDelivery } from '../src/emby/client.js';
 
 const $ = s => document.querySelector(s);
 const store = { get(k,d){try{const v=localStorage.getItem('linweb:'+k);return v==null?d:JSON.parse(v);}catch{return d;}}, set(k,v){try{localStorage.setItem('linweb:'+k,JSON.stringify(v));}catch{}} };
@@ -521,14 +521,47 @@ async function play(item, choice){
       if (probe.url && probe.url !== url) { url = probe.url; }
       probe.body?.cancel();                    // we only wanted the final URL
     } catch { /* keep the un-resolved url; the player will report if it fails */ }
-    EM.reportStart(item.Id, source, pb.playSessionId);   // register the session (best-effort)
     const title = item.Type==='Episode' ? `${item.SeriesName||''} S${item.ParentIndexNumber||1}E${item.IndexNumber||1} · ${item.Name}` : item.Name;
     const startTicks = item.UserData?.PlaybackPositionTicks || 0;
-    // Hand off to the existing LinWeb player. It reads ?url= and loads it through
-    // HttpSource -> worker -> MSE, exactly like a pasted direct link.
-    const q = new URLSearchParams({ url, title });
+    // Hand off to the dedicated Emby player (play.html). It owns the session
+    // lifecycle (start/progress/stopped) so resume works both ways, and it reads
+    // the chosen audio + subtitle below so the detail-page picks are honoured --
+    // the generic index.html player knew nothing about either.
+    const q = new URLSearchParams({ url, title, id: item.Id });
+    if (source?.Id) q.set('src', source.Id);
+    // Carry the byte size so the player never has to read a Content-Range header
+    // off the cross-origin (302->CDN) stream -- that header is not reliably
+    // CORS-exposed, and its absence was the "did not expose a Content-Range" fail.
+    if (source?.Size) q.set('size', source.Size);
+    if (pb.playSessionId) q.set('ps', pb.playSessionId);
     if (startTicks) q.set('t', Math.round(ticksToSec(startTicks)));
-    location.href = `./index.html?${q}`;
+
+    // Audio: the chooser index is positional over the source's audio streams,
+    // which the player enumerates in the same container order. Carry the
+    // language too so the player can re-find the track if the lists ever differ.
+    const auds = (source.MediaStreams||[]).filter(s=>s.Type==='Audio');
+    if (choice?.aud) q.set('aud', choice.aud);
+    if (auds[choice?.aud||0]?.Language) q.set('audlang', auds[choice?.aud||0].Language);
+
+    // Subtitle: choice.sub is 0=off, else index into [off, ...subtitle streams].
+    const subsList = (source.MediaStreams||[]).filter(s=>s.Type==='Subtitle');
+    const chosenSub = choice?.sub ? subsList[choice.sub-1] : null;
+    if (chosenSub) {
+      const how = subtitleDelivery(chosenSub);
+      if (how === 'client') {
+        // ass/ssa/pgs: draw in-browser. Map to the embedded-only index the
+        // player uses (external subs are not in the container, so exclude them).
+        q.set('sub', subsList.filter(s=>!s.IsExternal).indexOf(chosenSub));
+      } else if (how === 'text') {
+        // external or embedded text sub: let Emby serve SRT into a <track>.
+        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
+      } else {
+        q.set('subwarn', chosenSub.DisplayTitle || '图形字幕');   // external bitmap: no path
+      }
+      if (chosenSub.Language) q.set('sublang', chosenSub.Language);
+      q.set('sublabel', chosenSub.DisplayTitle || chosenSub.Language || '字幕');
+    }
+    location.href = `./play.html?${q}`;
   } catch (e) { fail(e); }
 }
 
@@ -549,11 +582,24 @@ $('#view').addEventListener('scroll', ()=> $('#view').classList.toggle('scrolled
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePreplay(); closeDetail(); } });
 
 // ---------- errors ----------
+// A HTTPS page is forbidden by the browser from fetching a http:// origin — the
+// request never leaves, surfacing only as "Failed to fetch" with NO CORS hint.
+// Local Emby is almost always http://<LAN-ip>, so this is the #1 cause of "it
+// should work but doesn't" and must be told apart from a genuine CORS miss.
+function mixedContentBlocked(server){
+  return location.protocol === 'https:' && /^http:\/\//i.test((server||'').trim());
+}
+function connErr(server){
+  return mixedContentBlocked(server)
+    ? '混合内容被拦截:本站是 HTTPS,而 Emby 是 http://。浏览器禁止 HTTPS 页面读取 http 资源——这不是 CORS,前端无法绕过。解法任选:①把 Emby 地址改用 https(如 8920 端口);②在本机用 http 打开 LinWeb(npm run serve);③给 Emby 套一层 https 反代。'
+    : '连不上服务器——跨域(CORS)未放行。在 Emby 后台「设置 → 网络 → 跨域 CORS 来源」把本站地址加进白名单(或填 *);若是自签 https 还需先让证书受信。';
+}
 function fail(e){
   console.error(e);
-  const msg = /Failed to fetch|NetworkError|CORS/i.test(e.message)
-    ? '无法连接服务器 — 可能是跨域(CORS)未放行。自托管 Emby 需允许本站来源,或用 extractor 代理。'
-    : /401|403/.test(e.message) ? '登录已过期,请重新登录。' : e.message;
+  let msg;
+  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) msg = connErr(EM?.server || $('#lServer')?.value);
+  else if (/401|403/.test(e.message)) msg = '登录已过期,请重新登录。';
+  else msg = e.message;
   toast(msg, true);
   if (/401|403|登录已过期/.test(msg)) { EM?.logout(); showLogin(); }
 }
@@ -576,11 +622,14 @@ $('#lServer').addEventListener('input', e=>{ clearTimeout(probeTimer); const v=e
 $('#lGo').onclick = async () => {
   const server = $('#lServer').value.trim(), user = $('#lUser').value.trim(), pass = $('#lPass').value;
   $('#lErr').textContent=''; if (!server || !user) { $('#lErr').textContent='请填写服务器地址和用户名。'; return; }
+  // Catch the http-server-on-https-page trap before the fetch even fires, so the
+  // user gets the real reason instead of a silent "Failed to fetch".
+  if (mixedContentBlocked(server)) { $('#lErr').textContent = connErr(server); return; }
   $('#lGo').disabled=true; $('#lGo').textContent='登录中…';
   try {
     EM = new EmbyClient(server); await EM.login(user, pass);
     store.set('emby', { server: EM.server }); enterApp();
-  } catch (e) { $('#lErr').textContent = /Failed to fetch|NetworkError/i.test(e.message) ? '连不上服务器 — 检查地址,以及 Emby 是否允许本站跨域(CORS)。' : e.message; }
+  } catch (e) { $('#lErr').textContent = /Failed to fetch|NetworkError/i.test(e.message) ? connErr(server) : e.message; }
   finally { $('#lGo').disabled=false; $('#lGo').textContent='登录'; }
 };
 [$('#lUser'),$('#lPass')].forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') $('#lGo').click(); }));
