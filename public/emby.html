@@ -508,7 +508,19 @@ async function play(item, choice){
     // honour the chosen version (MediaSource) if the user picked one
     let source = pb.source;
     if (choice && choice.ver != null && pb.sources?.[choice.ver]) source = pb.sources[choice.ver];
-    const url = EM.streamUrl(item.Id, source);
+    let url = EM.streamUrl(item.Id, source);
+    // The Emby /Videos/.../stream URL 302-redirects to a CDN node on another
+    // origin. A browser Range request needs a CORS preflight, and the Fetch spec
+    // forbids a preflighted request from following a cross-origin redirect
+    // ("Request requires preflight, which is disallowed to follow cross-origin
+    // redirect"). So resolve the final CDN URL HERE with a plain GET (no Range =>
+    // no preflight; redirect is followed normally) and hand the player that
+    // direct URL -- it hits the CDN straight, which serves 206 + CORS.
+    try {
+      const probe = await fetch(url);          // simple GET, follows the 302
+      if (probe.url && probe.url !== url) { url = probe.url; }
+      probe.body?.cancel();                    // we only wanted the final URL
+    } catch { /* keep the un-resolved url; the player will report if it fails */ }
     EM.reportStart(item.Id, source, pb.playSessionId);   // register the session (best-effort)
     const title = item.Type==='Episode' ? `${item.SeriesName||''} S${item.ParentIndexNumber||1}E${item.IndexNumber||1} · ${item.Name}` : item.Name;
     const startTicks = item.UserData?.PlaybackPositionTicks || 0;
