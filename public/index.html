@@ -80,6 +80,10 @@
      PGS draws to a main-thread 2D canvas and is unaffected, so scoped to .JASSUB. */
   #stage canvas.JASSUB { filter: opacity(0.996); }  /* ponytail: forces alpha-aware compositing without touching colour; ceiling is JASSUB 2.x's mandatory offscreen render (no main-thread path in 2.5.7) */
   #stage:fullscreen canvas.JASSUB { filter: none; }
+  /* Anime4K's opaque output canvas covers the video; subtitle canvases must stay
+     above it whatever the DOM insertion order was. */
+  #stage canvas.A4K { z-index:1; }
+  #stage canvas:not(.A4K) { z-index:2; }
 
   .placeholder {
     position:absolute; inset:0; display:flex; flex-direction:column;
@@ -315,6 +319,7 @@
 import { Player } from '../src/player.js';
 import { Subtitles, attachSrt } from '../src/subs/index.js';
 import { VolumeStage } from '../src/audio/gain.js';
+import { Anime4K } from '../src/video/anime4k.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
@@ -323,6 +328,9 @@ const subs = new Subtitles(player, { log: (m, l) => player.log(m, l) });
 // Built once and never rebuilt: createMediaElementSource can be called only
 // once per element, and calling it again throws and takes the audio with it.
 const volume = new VolumeStage(video, { log: (m, l) => player.log(m, l) });
+// Opt-in SDR-only GPU upscaler. The chosen mode survives a track/file switch the
+// same way the subtitle choice does.
+const anime4k = new Anime4K(video, { log: (m, l) => player.log(m, l) });
 
 const logEl = $('#log');
 player.log = (msg, level = 'info') => {
@@ -346,11 +354,13 @@ const fmtTime = s => {
 };
 
 let info = null;
+let a4kMode = 'off';        // surviving Anime4K choice: 'off' | 'A' | 'B' | 'C'
 
 async function load(input) {
   $('#meta').textContent = '读取中…';
   try {
     await subs.destroy();
+    anime4k.stop();
     // Loudness is a property of the film, so the measurement cannot carry over.
     volume.restart();
     const t0 = performance.now();
@@ -394,6 +404,17 @@ function render() {
   }
   if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
 
+  // Decode path, spelled out: video is always the platform hardware decoder (the
+  // whole point of remuxing to MSE), exotic audio the browser refuses falls to our
+  // WASM software decoder on the CPU. This answers "is this hardware or software?"
+  // without offering a mode switch the engine does not actually have for video.
+  const codec = t => t.track.codecId.split('/').pop();
+  const vTrack = info.video.find(v => v.supported) || info.video[0];
+  const aTrack = info.audio[0];
+  const decode = vTrack ? `<dt>解码</dt><dd>视频 <b>硬件解码</b> · GPU (${codec(vTrack)})`
+    + (aTrack ? `<br>音频 ${aTrack.supported ? `<b>浏览器原生</b> (${codec(aTrack)})` : `<b>软件解码</b> · CPU (${codec(aTrack)} → Opus)`}` : '')
+    + `</dd>` : '';
+
   $('#meta').innerHTML = `
     <div class="badges">${badges.join('')}</div>
     <dl class="kv">
@@ -404,6 +425,7 @@ function render() {
       ${info.mastering ? `<dt>母版</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits 峰值</dd>` : ''}
       ${info.cll ? `<dt>亮度</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
       ${info.fonts ? `<dt>字体</dt><dd>${info.fonts} 个内嵌</dd>` : ''}
+      ${decode}
     </dl>
     ${info.dynamicHdr ? `<div class="note">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
     ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
@@ -434,9 +456,20 @@ function render() {
     + (volume.ok ? `<div class="menu-row"><span>响度</span><select id="gainSel" aria-label="响度">
          <option value="1">原始音量</option><option value="auto">自动增益</option>
          <option value="1.5">+3.5 dB</option><option value="2">+6 dB</option><option value="3">+9.5 dB</option>
-       </select></div><div class="menu-note" id="gainNote"></div>` : '');
+       </select></div><div class="menu-note" id="gainNote"></div>` : '')
+    // SDR only: Anime4K renders through a WebGPU canvas, which cannot hold PQ, so
+    // HDR/DoVi keep the direct MSE path and the option is simply not offered.
+    + (Anime4K.supported && !info.hdr && !info.dolbyVision
+       ? `<div class="menu-row"><span>超分</span><select id="a4kSel" aria-label="动画超分 Anime4K">
+            <option value="off">关闭</option>
+            <option value="A">Mode A · 通用</option>
+            <option value="B">Mode B · 柔化</option>
+            <option value="C">Mode C · 去噪</option>
+          </select></div><div class="menu-note">仅 SDR 动画 · GPU 超分，开启时占用整帧渲染</div>` : '');
 
   $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
+  const a4kSel = $('#a4kSel');
+  if (a4kSel) { a4kSel.value = a4kMode; a4kSel.addEventListener('change', e => applyAnime4K(e.target.value)); }
   $('#gainSel')?.addEventListener('change', e => {
     const v = e.target.value;
     if (v === 'auto') { volume.setAuto(true); volume.boost = 1; }
@@ -492,12 +525,31 @@ async function applySubtitle(idx) {
   }
 }
 
+/**
+ * Turn the Anime4K upscaler on/off. Shared by the dropdown and by start(), the
+ * same pattern as applySubtitle -- one path so the choice and the running state
+ * can never drift. Falls back to 'off' if the GPU refuses to start.
+ */
+async function applyAnime4K(mode) {
+  a4kMode = mode;
+  const sel = $('#a4kSel');
+  if (sel) sel.disabled = true;
+  try {
+    anime4k.stop();
+    if (mode !== 'off') {
+      const ok = await anime4k.start(mode);
+      if (!ok) { a4kMode = 'off'; if (sel) sel.value = 'off'; }
+    }
+  } finally { if (sel) sel.disabled = false; }
+}
+
 async function start() {
   try {
     // A new play() rebuilds the MediaSource, so a renderer from the previous
     // run holds events for a timeline that is gone. The CHOICE survives.
     const wanted = Number($('#subSel')?.value ?? -1);
     await subs.destroy();
+    anime4k.stop();
     await player.play({
       videoIndex: Number($('#videoSel')?.value ?? 0),
       audioIndex: Number($('#audioSel')?.value ?? 0),
@@ -507,6 +559,9 @@ async function start() {
     await volume.resume().catch(() => {});
     await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
     if (wanted >= 0) await applySubtitle(wanted);
+    // Resume the upscaler only when the new file is SDR (the row is not even
+    // offered for HDR/DoVi); the choice otherwise waits for the next SDR file.
+    if (a4kMode !== 'off' && Anime4K.supported && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);

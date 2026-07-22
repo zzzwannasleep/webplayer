@@ -15,6 +15,7 @@
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "anime4k-webgpu": "^1.0.0",
     "jassub": "^2.5.7",
     "libav.js": "^6.9.8",
     "libpgs": "^0.8.1"

@@ -44,6 +44,16 @@ for (const f of ['libpgs.js', 'libpgs.worker.js']) {
   copyFileSync(`node_modules/libpgs/dist/${f}`, `${OUT}/${f}`);
 }
 
+// anime4k-webgpu (MIT): optional SDR-only GPU upscaler for anime. It ships as a
+// webpack CJS bundle whose exports are attached via Object.defineProperty, which
+// esbuild cannot hoist into ES named bindings -- so src/video/anime4k.js imports
+// the namespace (`import * as A4K`) and reads pipeline classes off it at runtime.
+await build({
+  entryPoints: { 'anime4k': 'node_modules/anime4k-webgpu/lib/index.js' },
+  outdir: OUT,
+  bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning',
+});
+
 // ffmpeg.wasm, for the codecs no browser decodes: E-AC3, AC-3, DTS, TrueHD.
 //
 // The single-threaded core is deliberate. The multi-threaded one needs
