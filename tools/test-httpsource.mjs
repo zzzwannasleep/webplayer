@@ -1,6 +1,7 @@
-// HttpSource re-resolution: a signed direct link expires, so the source must
-// refresh it (proactively near TTL, and on a 401/403/410) and retry the same
-// bytes. Uses an injected mock fetch so no network is touched.
+// HttpSource: open() probes with a tiny Range GET (not HEAD -- many CDNs only
+// advertise Accept-Ranges on GET), and a signed direct link is refreshed
+// (proactively near TTL, and on 401/403/410) with the same bytes retried.
+// Uses an injected mock fetch so no network is touched.
 import { HttpSource } from '../src/demux/matroska.js';
 
 let failures = 0;
@@ -18,18 +19,21 @@ const resp = (status, body = null, headers = {}) => ({
 
 console.log('=== HttpSource ===');
 
-// 1) Plain direct URL, no resolver -- behaves as before.
+// 1) Plain direct URL: open() gets the size from the 206 probe's Content-Range,
+//    then reads work. (Regression guard: a HEAD without Accept-Ranges must not
+//    be needed -- the probe is a Range GET.)
 {
   const calls = [];
-  const fetchMock = async (url, opts) => {
-    calls.push(opts?.method === 'HEAD' ? 'HEAD' : url);
-    return opts?.method === 'HEAD'
-      ? resp(200, null, { 'accept-ranges': 'bytes', 'content-length': '1000' })
-      : resp(206, new Uint8Array([1, 2, 3]));
+  let call = 0;
+  const fetchMock = async (url) => {
+    calls.push(url); call++;
+    return call === 1
+      ? resp(206, new Uint8Array([0, 0]), { 'content-range': 'bytes 0-1/1000' })     // open probe
+      : resp(206, new Uint8Array([1, 2, 3]), { 'content-range': 'bytes 0-2/1000' });  // read
   };
   const src = new HttpSource('http://x/v.mp4', { fetch: fetchMock });
   await src.open();
-  check('plain: size from HEAD', src.size, 1000);
+  check('plain: size from Content-Range', src.size, 1000);
   check('plain: read length', (await src.read(0, 3)).length, 3);
   check('plain: fetched the given url', calls[1], 'http://x/v.mp4');
 }
@@ -39,14 +43,16 @@ console.log('=== HttpSource ===');
 {
   let resolves = 0;
   const resolve = async () => ({ url: `http://cdn/sig${++resolves}`, expiresAt: 0 });
-  let n = 0;
-  const fetchMock = async (url, opts) => {
-    if (opts?.method === 'HEAD') return resp(200, null, { 'accept-ranges': 'bytes', 'content-length': '500' });
-    return ++n === 1 ? resp(403) : resp(206, new Uint8Array([9, 9]));
+  let call = 0;
+  const fetchMock = async () => {
+    call++;
+    if (call === 1) return resp(206, new Uint8Array([0, 0]), { 'content-range': 'bytes 0-1/500' }); // open probe
+    if (call === 2) return resp(403);                                                                // read: expired
+    return resp(206, new Uint8Array([9, 9]), { 'content-range': 'bytes 0-1/500' });                  // read retry
   };
   const src = new HttpSource('http://page/watch?id=1', { resolve, fetch: fetchMock });
   await src.open();
-  check('resolve: resolved before HEAD', resolves, 1);
+  check('resolve: resolved before probe', resolves, 1);
   check('resolve: fetch uses the direct link', src.url, 'http://cdn/sig1');
   const b = await src.read(0, 2);
   check('expiry: re-resolved on 403', resolves, 2);
@@ -58,9 +64,7 @@ console.log('=== HttpSource ===');
 {
   let resolves = 0;
   const resolve = async () => ({ url: `http://cdn/${++resolves}`, expiresAt: Date.now() + 1000 });
-  const fetchMock = async (url, opts) => opts?.method === 'HEAD'
-    ? resp(200, null, { 'accept-ranges': 'bytes', 'content-length': '100' })
-    : resp(206, new Uint8Array([7]));
+  const fetchMock = async () => resp(206, new Uint8Array([7]), { 'content-range': 'bytes 0-0/100' });
   const src = new HttpSource('http://page', { resolve, fetch: fetchMock });
   await src.open();          // resolves=1
   await src.read(0, 1);      // near-expiry -> proactive refresh

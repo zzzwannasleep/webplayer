@@ -100,10 +100,18 @@ export class HttpSource {
 
   async open() {
     if (this.resolve) await this._refresh();   // turn the page URL into a direct link first
-    const r = await this._fetch(this.url, { method: 'HEAD' });
-    if (!r.ok) throw new Error(`HEAD ${this.url} -> ${r.status}`);
-    if (r.headers.get('accept-ranges') !== 'bytes') throw new Error('server does not support Range requests');
-    this.size = Number(r.headers.get('content-length'));
+    // Probe with a tiny Range GET, NOT a HEAD: many CDNs advertise
+    // Accept-Ranges only on real GET responses (and some reject HEAD outright),
+    // so a HEAD/Accept-Ranges check falsely rejects a server that DOES support
+    // Range. A 206 both confirms partial support and carries the total size in
+    // Content-Range ("bytes 0-1/TOTAL"), in one request. The total must be
+    // CORS-exposed; that is the server's to do (Access-Control-Expose-Headers).
+    const r = await this._fetch(this.url, { headers: { Range: 'bytes=0-1' } });
+    if (r.status !== 206) throw new Error(`server does not support Range requests (probe -> ${r.status})`);
+    const total = Number(r.headers.get('content-range')?.split('/')[1]);
+    await r.arrayBuffer().catch(() => {});    // drain the 2-byte probe body
+    if (!(total > 0)) throw new Error('server did not expose a Content-Range total size (check Access-Control-Expose-Headers)');
+    this.size = total;
     return this;
   }
 

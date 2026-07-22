@@ -28,7 +28,7 @@ const post = () => fetch('/collect', { method:'POST', body: out.textContent }).c
 const say = (m, c='') => { const d=document.createElement('div'); if(c)d.className=c; d.textContent=m; out.append(d); out.scrollTop=out.scrollHeight; post(); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const P = new URLSearchParams(location.search);
-const FILE = 'http://localhost:8080/' + (P.get('file') || 'houshi.mkv');
+const FILE = P.get('url') || ('http://localhost:8080/' + (P.get('file') || 'houshi.mkv'));   // ?url=<encoded absolute URL> for a remote source
 const DUR = (Number(P.get('dur')) || 55) * 1000;
 const frame = document.getElementById('frame');
 frame.src = P.get('app') || '/public/index.html';   // ?app=/dist/index.html verifies the built site
