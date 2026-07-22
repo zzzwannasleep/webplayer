@@ -74,16 +74,20 @@ export class EmbyClient {
   }
 
   // ---- low-level -----------------------------------------------------------
-  // Token is carried three ways for maximum server compatibility: embedded in
-  // the X-Emby-Authorization header (canonical), as X-Emby-Token, AND as an
-  // ?api_key= query param -- some Emby builds/reverse-proxies honour only one.
+  // CORS-critical: use the STANDARD `Authorization` header, never the Emby-
+  // specific X-Emby-Authorization / X-Emby-Token. A cross-origin Emby (verified
+  // on smart.uhdnow.com) only allow-lists `Authorization` in its CORS preflight
+  // (Access-Control-Allow-Headers: Content-Type, Authorization, ...), so any
+  // X-Emby-* header makes the browser block the request as "not allowed". Emby
+  // accepts the same `MediaBrowser Client=...` credential string in either
+  // header. The access token rides both here (Token="...") and as ?api_key=
+  // (added in _url) so simple GETs work without any custom header at all.
   _authHeader() {
     return `MediaBrowser Client="${CLIENT}", Device="Browser", DeviceId="${this.deviceId}", Version="${VERSION}"`
       + (this.token ? `, Token="${this.token}"` : '');
   }
   _headers(json) {
-    const h = { 'X-Emby-Authorization': this._authHeader() };
-    if (this.token) h['X-Emby-Token'] = this.token;
+    const h = { 'Authorization': this._authHeader() };
     if (json) h['Content-Type'] = 'application/json';
     return h;
   }
