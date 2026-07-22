@@ -33,6 +33,12 @@ cpSync(`${ROOT}/public/vendor`, `${OUT}/vendor`, { recursive: true });
 let html = readFileSync(`${ROOT}/public/index.html`, 'utf8').replace(/\.\.\/src\//g, './src/');
 writeFileSync(`${OUT}/index.html`, html);
 
+// The Emby browse client is a second entry point (public/emby.html). Same
+// relative-path rewrite so its `import ../src/emby/client.js` resolves at the
+// site root. It hands playback off to index.html?url=, so both must ship.
+const emby = readFileSync(`${ROOT}/public/emby.html`, 'utf8').replace(/\.\.\/src\//g, './src/');
+writeFileSync(`${OUT}/emby.html`, emby);
+
 // A no-store-free host may cache aggressively; a tiny 404 fallback keeps deep
 // links from breaking on SPAs. This app has one page, so 404 -> index.
 writeFileSync(`${OUT}/404.html`, html);

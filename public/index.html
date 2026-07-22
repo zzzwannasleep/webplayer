@@ -245,6 +245,7 @@
     </svg>
     LinWeb <small>0.1.0 · MKV · HDR · DV · ASS/PGS</small>
   </div>
+  <a class="btn" href="./emby.html" style="text-decoration:none">Emby 媒体库</a>
   <div class="spacer"></div>
   <div class="url-wrap">
     <input id="url" type="url" spellcheck="false" placeholder="粘贴视频直链，或把文件拖进来">
@@ -525,6 +526,26 @@ const openUrl = () => {
 };
 $('#loadUrl').addEventListener('click', openUrl);
 $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') openUrl(); });
+
+// Deep-link entry: emby.html resolves a direct Static stream URL and hands it
+// off as ?url= (with an optional ?t= resume position in seconds). Loading it is
+// identical to a pasted direct link -- HttpSource -> worker -> MSE.
+{
+  const params = new URLSearchParams(location.search);
+  const deepUrl = params.get('url');
+  if (deepUrl) {
+    $('#url').value = deepUrl;
+    const startAt = Number(params.get('t')) || 0;
+    if (startAt) {
+      const seekOnce = () => {
+        video.removeEventListener('loadeddata', seekOnce);
+        if (Number.isFinite(video.duration) && startAt < video.duration) { try { video.currentTime = startAt; } catch {} }
+      };
+      video.addEventListener('loadeddata', seekOnce);
+    }
+    load(deepUrl);
+  }
+}
 
 // Drag and drop anywhere on the page.
 let dragDepth = 0;
