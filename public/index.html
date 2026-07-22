@@ -31,7 +31,7 @@
     background:linear-gradient(180deg,#12161b,#0f1317);
   }
   .brand { display:flex; align-items:center; gap:9px; font-weight:650; letter-spacing:-.01em; }
-  .brand svg { width:19px; height:19px; color:var(--acc); }
+  .brand img { width:19px; height:19px; object-fit:contain; }   /* the site icon; page is dark-only, so the white twin */
   .brand small { color:var(--faint); font-weight:400; font-size:11px; letter-spacing:.04em; }
   .spacer { flex:1; }
 
@@ -252,9 +252,7 @@
 
 <header>
   <div class="brand">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
-    </svg>
+    <img src="./icon-white.png" alt="">
     LinWeb <small>0.1.0 · MKV · HDR · DV · ASS/PGS</small>
   </div>
   <a class="btn" href="./emby.html" style="text-decoration:none">Emby 媒体库</a>

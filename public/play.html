@@ -2,9 +2,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LinWeb · 播放</title>
-<!-- black glyph on a light tab strip, white on a dark one -->
-<link rel="icon" href="./icon.png" media="(prefers-color-scheme: light)">
-<link rel="icon" href="./icon-white.png" media="(prefers-color-scheme: dark)">
+<!-- one icon: Edge/Chrome lighten a dark monochrome favicon themselves on a dark
+     tab strip (verified on the real strip), so a media-switched white twin would
+     only risk white-on-white where they do not. icon-white.png is for in-page use. -->
+<link rel="icon" href="./icon.png">
 
 <!--
   The dedicated Emby player. emby.html resolves a DIRECT stream URL and hands it

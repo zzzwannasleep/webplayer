@@ -2,9 +2,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LinWeb · Emby</title>
-<!-- black glyph on a light tab strip, white on a dark one -->
-<link rel="icon" href="./icon.png" media="(prefers-color-scheme: light)">
-<link rel="icon" href="./icon-white.png" media="(prefers-color-scheme: dark)">
+<!-- one icon: Edge/Chrome lighten a dark monochrome favicon themselves on a dark
+     tab strip (verified on the real strip), so a media-switched white twin would
+     only risk white-on-white where they do not. icon-white.png is for in-page use. -->
+<link rel="icon" href="./icon.png">
 
 <style>
   :root{
@@ -38,14 +39,23 @@
   #app.hidden{display:none}
   #rail{background:linear-gradient(180deg,var(--ink-2),var(--ink));border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 0;z-index:40}
   .brand{width:38px;height:38px;border-radius:11px;margin-bottom:12px;background:linear-gradient(140deg,var(--ink-3),var(--ink-2));border:1px solid var(--line-2);display:grid;place-items:center;color:var(--fg);font-weight:800;cursor:pointer}
+  /* The site icon is a black glyph: invert it on the dark chrome, leave it be on
+     the light theme. Same two conditions the palette above switches on. */
+  .brand img{width:22px;height:22px;object-fit:contain;filter:invert(1)}
+  :root[data-theme=light] .brand img{filter:none}
+  @media (prefers-color-scheme:light){:root:not([data-theme]) .brand img{filter:none}}
   .navbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:var(--fg-mute);position:relative;transition:.25s var(--ease-out)}
   .navbtn svg{width:22px;height:22px}
   .navbtn:hover{color:var(--fg);background:var(--hover)}
   .navbtn.on{color:var(--accent)}
   .navbtn.on::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:3px;background:var(--accent)}
   .rail-sp{flex:1}
-  .avatar{position:relative;overflow:hidden;width:36px;height:36px;border-radius:50%;background:conic-gradient(from 210deg,#6a7cff,#b06aff,#ff8a6a,#6a7cff);border:2px solid var(--surface-2);margin-top:6px;cursor:pointer}
-  .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  /* The server's own icon and nothing else. Until one loads it is a plain flat
+     target so the logout button is still findable; once it does, the chrome
+     gets out of the way (.has-icon). */
+  .avatar{position:relative;overflow:hidden;width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--line-2);margin-top:6px;cursor:pointer}
+  .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  .avatar.has-icon{background:none;border-color:transparent}
 
   #view{position:relative;overflow-y:auto;overflow-x:hidden}
   #topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:14px;padding:14px 32px;backdrop-filter:blur(14px);background:linear-gradient(180deg,rgba(var(--bg-rgb),.86),rgba(var(--bg-rgb),.3) 70%,transparent);transition:background .3s}
@@ -190,10 +200,10 @@
   #login.open{display:grid}
   #login .lbg{position:absolute;inset:0;z-index:0;background:radial-gradient(120% 90% at 20% 10%,#2a3a7a,transparent 55%),radial-gradient(120% 120% at 85% 90%,#6a2a4a,transparent 55%),linear-gradient(160deg,#0e1424,#070a12)}
   .lbox{position:relative;z-index:2;width:min(420px,92vw);background:rgba(16,21,31,.72);border:1px solid var(--line);border-radius:22px;padding:36px 34px;backdrop-filter:blur(20px);box-shadow:0 40px 100px -30px #000}
-  .lbrand{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-  .lbrand .b{width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,#20232b,#14161b);border:1px solid rgba(255,255,255,.18);display:grid;place-items:center;color:#fff;font-weight:800;font-size:20px}
+  .lbrand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  .lbrand .b{width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,#20232b,#14161b);border:1px solid rgba(255,255,255,.18);display:grid;place-items:center}
+  .lbrand .b img{width:26px;height:26px;object-fit:contain}   /* login box is always dark glass -> the white twin */
   .lbrand .t{font-size:20px;font-weight:800;color:#fff}.lbrand .t small{display:block;font-size:12px;color:#8a95a3;font-weight:500}
-  .lsub{color:#8a95a3;font-size:13px;margin:0 0 22px;line-height:1.5}
   .lfield{margin-bottom:14px}
   .lfield label{font-size:12px;color:#8a95a3;font-weight:600;display:block;margin-bottom:6px}
   .lfield input{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-size:15px;outline:0}
@@ -209,10 +219,12 @@
   .lsrvs .lcap{font-size:12px;color:#8a95a3;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px}
   .lsrv{display:flex;align-items:center;gap:9px;width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:9px 10px 9px 12px;margin-bottom:7px;cursor:pointer;transition:.18s}
   .lsrv:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25)}
-  /* icon box: the letter is the floor, an <img> covers it when one loads */
+  /* The letter is only a stand-in: it is what shows while no server icon has
+     loaded, and it gets out of the way the moment one does. */
   .sic{position:relative;width:34px;height:34px;border-radius:10px;flex:0 0 auto;overflow:hidden;display:grid;place-items:center;
-       background:linear-gradient(140deg,#2b3346,#1a1f2b);border:1px solid rgba(255,255,255,.12);font-weight:800;font-size:15px;color:#fff}
-  .sic img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+       background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);font-weight:800;font-size:15px;color:#fff}
+  .sic img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  .sic.has-icon{background:none;border-color:transparent;color:transparent}
   .lsrv .si{min-width:0;flex:1;text-align:left}
   .lsrv .sn{font-size:13.5px;font-weight:600;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lsrv .su{font-size:11.5px;color:#8a95a3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
@@ -231,8 +243,7 @@
 <!-- login -->
 <div id="login"><div class="lbg"></div>
   <div class="lbox">
-    <div class="lbrand"><div class="b">L</div><div class="t">LinWeb<small>连接到 Emby 服务器</small></div></div>
-    <p class="lsub">登录后浏览你的媒体库,原盘直连、零转码,HDR / Dolby Vision / 特效字幕原样交给浏览器解码。</p>
+    <div class="lbrand"><div class="b"><img src="./icon-white.png" alt=""></div><div class="t">LinWeb<small>连接到 Emby 服务器</small></div></div>
     <div class="lsrvs" id="lServers"></div>
     <div class="lfield"><label>服务器地址</label><input id="lServer" placeholder="https://your-emby:8920" spellcheck="false"></div>
     <div class="lfield"><label>用户名</label><input id="lUser" spellcheck="false" autocomplete="username"></div>
@@ -246,7 +257,7 @@
 <!-- app -->
 <div id="app" class="hidden">
   <nav id="rail">
-    <div class="brand" id="brandBtn">L</div>
+    <div class="brand" id="brandBtn"><img src="./icon.png" alt="LinWeb"></div>
     <button class="navbtn on" data-view="home" title="首页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></button>
     <button class="navbtn" data-view="library" title="媒体库"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
     <div class="rail-sp"></div>
@@ -660,9 +671,12 @@ const hostOf = u => { try { return new URL(u).host; } catch { return u || '?'; }
 // avatar -- shows through. No fetch, no CORS, no round-trip when there is none.
 function tryIcons(img, urls){
   if (!img) return;
+  const box = img.parentElement;
   let i = 0;
-  const next = () => { if (i < urls.length) img.src = urls[i++]; else img.remove(); };
+  const next = () => { if (i < urls.length) img.src = urls[i++]; else { img.remove(); box?.classList.remove('has-icon'); } };
   img.onerror = next;
+  // a real icon replaces the stand-in letter and its box, rather than sitting on top of it
+  img.onload = () => box?.classList.add('has-icon');
   next();
 }
 async function probeUsers(server){
