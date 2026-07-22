@@ -25,9 +25,11 @@ mkdirSync(OUT, { recursive: true });
 // The application code and the built wasm bundle.
 cpSync(`${ROOT}/src`, `${OUT}/src`, { recursive: true });
 cpSync(`${ROOT}/public/vendor`, `${OUT}/vendor`, { recursive: true });
-// The favicon every page links as ./icon.png -- same relative path in public/
-// and at the site root, so nothing needs rewriting.
-cpSync(`${ROOT}/public/icon.png`, `${OUT}/icon.png`);
+// The favicons every page links as ./icon*.png -- same relative path in public/
+// and at the site root, so nothing needs rewriting. Two of them: the black glyph
+// is invisible on a dark tab strip, so a white twin is served under
+// prefers-color-scheme: dark (Edge/Chrome honour `media` on rel=icon).
+for (const f of ['icon.png', 'icon-white.png']) cpSync(`${ROOT}/public/${f}`, `${OUT}/${f}`);
 
 // index.html at the root, with ../src/ -> ./src/. It MUST stay ./src/, not
 // src/: a bare specifier (no leading ./) is a module name, not a path, and
