@@ -25,6 +25,9 @@ mkdirSync(OUT, { recursive: true });
 // The application code and the built wasm bundle.
 cpSync(`${ROOT}/src`, `${OUT}/src`, { recursive: true });
 cpSync(`${ROOT}/public/vendor`, `${OUT}/vendor`, { recursive: true });
+// The favicon every page links as ./icon.png -- same relative path in public/
+// and at the site root, so nothing needs rewriting.
+cpSync(`${ROOT}/public/icon.png`, `${OUT}/icon.png`);
 
 // index.html at the root, with ../src/ -> ./src/. It MUST stay ./src/, not
 // src/: a bare specifier (no leading ./) is a module name, not a path, and
