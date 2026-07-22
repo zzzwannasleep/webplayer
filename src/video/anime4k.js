@@ -59,13 +59,23 @@ export class Anime4K {
     const w = v.videoWidth, h = v.videoHeight;
     if (!w || !h) { this.log('视频尺寸未知，超分未启动', 'warn'); return false; }
 
-    let device;
+    let device, adapter;
     try {
-      const adapter = await navigator.gpu.requestAdapter();
+      // Ask for the discrete GPU explicitly: the default is 'low-power', which on
+      // a laptop is the integrated GPU -- fine for a triangle, but Anime4K's CNN
+      // saturates it and stutters. 'high-performance' routes to the dGPU.
+      adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
       device = adapter && await adapter.requestDevice();
     } catch (e) { this.log(`WebGPU 初始化失败: ${e.message}`, 'warn'); return false; }
     if (!device) { this.log('没有可用的 GPU 适配器，超分未启动', 'warn'); return false; }
     this.device = device;
+    // Report the chosen GPU so it's verifiable that the dGPU, not the iGPU, is in use.
+    try {
+      const i = adapter.info || (adapter.requestAdapterInfo && await adapter.requestAdapterInfo());
+      if (i && (i.vendor || i.architecture || i.description)) {
+        this.log(`超分 GPU: ${[i.vendor, i.architecture, i.description].filter(Boolean).join(' / ')}`);
+      }
+    } catch {}
 
     // Vendored bundle is a webpack CJS module; its classes hang off the default
     // export (see tools/build-vendor.mjs).
