@@ -301,10 +301,10 @@ $('#themeBtn').onclick = () => { const cur = document.documentElement.dataset.th
 
 // ---------- image helpers (with gradient fallback so nothing shows broken) ----------
 const hashGrad = s => { let h = 0; for (const c of (s||'x')) h = (h*31 + c.charCodeAt(0)) >>> 0; return `linear-gradient(150deg,hsl(${h%360} 42% 28%),hsl(${(h>>3)%360} 38% 11%))`; };
-const posterBg = it => { const u = EM.imageUrl(it, 'Primary', { maxWidth: 360 }); return u ? `background-image:url("${u}")` : `background-image:${hashGrad(it.Name)}`; };
-const thumbBg  = it => { const u = EM.imageUrl(it, 'Primary', { maxWidth: 480 }); return u ? `background-image:url("${u}")` : `background-image:${hashGrad(it.Name)}`; };
-const backdropBg = it => { const u = EM.backdropUrl(it, { maxWidth: 1600 }); return u ? `background-image:url("${u}")` : `background-image:${hashGrad(it.Name)}`; };
-const personBg = p => { if (p.PrimaryImageTag) { const q = new URLSearchParams({ tag: p.PrimaryImageTag, maxWidth: '180', quality: '90' }); if (EM.token) q.set('api_key', EM.token); return `background-image:url("${EM.server}/Items/${p.Id}/Images/Primary?${q}")`; } return `background-image:${hashGrad(p.Name)}`; };
+const posterBg = it => { const u = EM.imageUrl(it, 'Primary', { maxWidth: 360 }); return u ? `background-image:url('${u}')` : `background-image:${hashGrad(it.Name)}`; };
+const thumbBg  = it => { const u = EM.imageUrl(it, 'Primary', { maxWidth: 480 }); return u ? `background-image:url('${u}')` : `background-image:${hashGrad(it.Name)}`; };
+const backdropBg = it => { const u = EM.backdropUrl(it, { maxWidth: 1600 }); return u ? `background-image:url('${u}')` : `background-image:${hashGrad(it.Name)}`; };
+const personBg = p => { if (p.PrimaryImageTag) { const q = new URLSearchParams({ tag: p.PrimaryImageTag, maxWidth: '180', quality: '90' }); if (EM.token) q.set('api_key', EM.token); return `background-image:url('${EM.server}/Items/${p.Id}/Images/Primary?${q}')`; } return `background-image:${hashGrad(p.Name)}`; };
 const yearOf = it => it.ProductionYear || (it.PremiereDate||'').slice(0,4);
 const ratingOf = it => it.CommunityRating ? it.CommunityRating.toFixed(1) : null;
 
