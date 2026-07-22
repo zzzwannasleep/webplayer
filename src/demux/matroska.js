@@ -75,12 +75,16 @@ export class FileSource {
 const EXPIRED = new Set([401, 403, 410]);
 
 export class HttpSource {
-  constructor(url, { resolve = null, fetch: fetchImpl = null } = {}) {
+  constructor(url, { resolve = null, fetch: fetchImpl = null, size = 0 } = {}) {
     this.origin = url;        // the URL the user gave; handed to resolve()
     this.url = url;           // the URL actually fetched (a direct link)
     this.resolve = resolve;
     this.expiresAt = 0;       // ms epoch; 0 = unknown/never
-    this.size = 0;
+    // A caller that already knows the byte length (e.g. Emby's PlaybackInfo
+    // MediaSource.Size) may seed it. Reads never touch a response header, so a
+    // known size lets open() skip its dependence on a CORS-exposed Content-Range
+    // -- which a 302-to-CDN stream cannot be relied on to expose.
+    this.size = size;
     this.name = url.split('/').pop();
     // Wrap, don't capture: `const f = globalThis.fetch; f(...)` throws "Illegal
     // invocation" because fetch must run with globalThis as its receiver.
@@ -110,8 +114,12 @@ export class HttpSource {
     if (r.status !== 206) throw new Error(`server does not support Range requests (probe -> ${r.status})`);
     const total = Number(r.headers.get('content-range')?.split('/')[1]);
     await r.arrayBuffer().catch(() => {});    // drain the 2-byte probe body
-    if (!(total > 0)) throw new Error('server did not expose a Content-Range total size (check Access-Control-Expose-Headers)');
-    this.size = total;
+    // Prefer the header when the server exposes it (authoritative for the URL
+    // actually being fetched); otherwise fall back to a caller-seeded size. Only
+    // fail when we have neither -- the 206 already proved Range works, so the
+    // sole missing piece is the total, and reads never need the header.
+    if (total > 0) this.size = total;
+    else if (!(this.size > 0)) throw new Error('server did not expose a Content-Range total size (check Access-Control-Expose-Headers)');
     return this;
   }
 

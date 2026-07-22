@@ -85,5 +85,36 @@ console.log('=== HttpSource ===');
   } finally { globalThis.fetch = orig; }
 }
 
+// 5) The Content-Range fix: a 302->CDN stream serves 206 with body readable
+//    (ACAO:*) but does NOT CORS-expose Content-Range. Without a seeded size that
+//    threw "did not expose a Content-Range total size". With a caller-seeded
+//    size (Emby MediaSource.Size) open() succeeds and reads still work.
+{
+  const fetchMock = async () => resp(206, new Uint8Array([0, 0]), {}); // 206, NO content-range header
+  const src = new HttpSource('http://cdn/stream.mkv', { fetch: fetchMock, size: 21235784353 });
+  await src.open();
+  check('seeded: size used when Content-Range is not exposed', src.size, 21235784353);
+  check('seeded: read still works (body needs no header)', (await src.read(0, 2)).length, 2);
+}
+
+// 6) Regression: 206 without Content-Range AND no seeded size must still throw
+//    the helpful message (the safety net must not mask a genuinely unusable
+//    server for the non-Emby direct-URL path).
+{
+  const fetchMock = async () => resp(206, new Uint8Array([0, 0]), {});
+  const src = new HttpSource('http://cdn/stream.mkv', { fetch: fetchMock });
+  let msg = '';
+  try { await src.open(); } catch (e) { msg = e.message; }
+  check('unseeded: still throws Content-Range error', /did not expose a Content-Range/.test(msg), true);
+}
+
+// 7) An exposed Content-Range is authoritative: it wins over a (wrong) seed.
+{
+  const fetchMock = async () => resp(206, new Uint8Array([0, 0]), { 'content-range': 'bytes 0-1/999' });
+  const src = new HttpSource('http://cdn/stream.mkv', { fetch: fetchMock, size: 12345 });
+  await src.open();
+  check('header wins: prefers exposed Content-Range over seed', src.size, 999);
+}
+
 console.log(failures ? `\n${failures} HTTPSOURCE CHECK(S) FAILED` : '\nALL HTTPSOURCE CHECKS PASSED');
 process.exit(failures ? 1 : 0);

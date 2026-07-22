@@ -71,7 +71,12 @@ async function open(input) {
   eof = false;
   fillPasses = 0;
 
-  const source = typeof input === 'string' ? await new HttpSource(input).open() : new FileSource(input);
+  // input: a URL string, a { url, size } object (size from Emby, so open() need
+  // not read a cross-origin Content-Range), or a File/Blob for local playback.
+  let source;
+  if (typeof input === 'string') source = await new HttpSource(input).open();
+  else if (input && typeof input.url === 'string') source = await new HttpSource(input.url, { size: input.size }).open();
+  else source = new FileSource(input);
   demuxer = await new MatroskaDemuxer(source).parseHeader();
   info = await describe();
   postMessage({ type: 'info', info });
