@@ -13,7 +13,9 @@
 import { mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { build } from 'esbuild';
 
-const OUT = 'D:/xiaochengxu/webplayer/public/vendor';
+// Relative to the repo root (npm scripts run there), so it works on any machine
+// and in CI -- not a hardcoded absolute path.
+const OUT = 'public/vendor';
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
