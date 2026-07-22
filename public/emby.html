@@ -508,19 +508,13 @@ async function play(item, choice){
     // honour the chosen version (MediaSource) if the user picked one
     let source = pb.source;
     if (choice && choice.ver != null && pb.sources?.[choice.ver]) source = pb.sources[choice.ver];
-    let url = EM.streamUrl(item.Id, source);
-    // The Emby /Videos/.../stream URL 302-redirects to a CDN node on another
-    // origin. A browser Range request needs a CORS preflight, and the Fetch spec
-    // forbids a preflighted request from following a cross-origin redirect
-    // ("Request requires preflight, which is disallowed to follow cross-origin
-    // redirect"). So resolve the final CDN URL HERE with a plain GET (no Range =>
-    // no preflight; redirect is followed normally) and hand the player that
-    // direct URL -- it hits the CDN straight, which serves 206 + CORS.
-    try {
-      const probe = await fetch(url);          // simple GET, follows the 302
-      if (probe.url && probe.url !== url) { url = probe.url; }
-      probe.body?.cancel();                    // we only wanted the final URL
-    } catch { /* keep the un-resolved url; the player will report if it fails */ }
+    // Hand the player the raw Emby /Videos/stream URL. It 302-redirects to a CDN
+    // on another origin; HttpSource resolves that redirect itself at fetch-time (a
+    // simple no-Range GET it is allowed to follow), so we must NOT pre-resolve it
+    // here. Pre-resolving before this full page navigation raced the CDN link's
+    // TTL, and when it failed it silently handed play.html an un-followable 302 --
+    // the "CORS on playback" bug. Stable URL in, fresh resolve at the fetch.
+    const url = EM.streamUrl(item.Id, source);
     const title = item.Type==='Episode' ? `${item.SeriesName||''} S${item.ParentIndexNumber||1}E${item.IndexNumber||1} · ${item.Name}` : item.Name;
     const startTicks = item.UserData?.PlaybackPositionTicks || 0;
     // Hand off to the dedicated Emby player (play.html). It owns the session

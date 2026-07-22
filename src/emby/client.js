@@ -76,7 +76,7 @@ export class EmbyClient {
   // ---- low-level -----------------------------------------------------------
   // CORS-critical: use the STANDARD `Authorization` header, never the Emby-
   // specific X-Emby-Authorization / X-Emby-Token. A cross-origin Emby (verified
-  // on smart.uhdnow.com) only allow-lists `Authorization` in its CORS preflight
+  // against a real server) only allow-lists `Authorization` in its CORS preflight
   // (Access-Control-Allow-Headers: Content-Type, Authorization, ...), so any
   // X-Emby-* header makes the browser block the request as "not allowed". Emby
   // accepts the same `MediaBrowser Client=...` credential string in either

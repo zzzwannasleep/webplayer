@@ -102,8 +102,26 @@ export class HttpSource {
   /** True if the link is known to expire within `ms` from now. */
   _stale(ms = 5000) { return this.expiresAt > 0 && Date.now() > this.expiresAt - ms; }
 
+  // A tokenised Emby /Videos/stream URL 302-redirects to a CDN on another origin.
+  // The Range probe below is preflighted, and the Fetch spec forbids a preflighted
+  // request from following a cross-origin redirect ("Request requires preflight,
+  // which is disallowed to follow cross-origin redirect") -- so it would throw a
+  // CORS error on the raw Emby URL. Resolve the redirect HERE with a simple
+  // (no-Range => un-preflighted) GET, which IS allowed to follow it, and adopt the
+  // final CDN URL; the Range probe then hits the CDN directly. Doing this at
+  // fetch-time (not once at hand-off, before a page navigation) means the link is
+  // always fresh, so a short-TTL/one-shot CDN link can't go stale in transit.
+  async _followRedirect() {
+    let r;
+    try { r = await this._fetch(this.url); }
+    catch { return; }                          // network/CORS: let the Range probe surface it
+    if (r.url && r.url !== this.url) { this.url = r.url; this.name = r.url.split('/').pop(); }
+    r.body?.cancel().catch(() => {});          // the final URL was all we wanted; drop the body
+  }
+
   async open() {
     if (this.resolve) await this._refresh();   // turn the page URL into a direct link first
+    else await this._followRedirect();         // ...or just follow a plain 302 to its CDN target
     // Probe with a tiny Range GET, NOT a HEAD: many CDNs advertise
     // Accept-Ranges only on real GET responses (and some reject HEAD outright),
     // so a HEAD/Accept-Ranges check falsely rejects a server that DOES support

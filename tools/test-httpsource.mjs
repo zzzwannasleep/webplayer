@@ -116,5 +116,26 @@ console.log('=== HttpSource ===');
   check('header wins: prefers exposed Content-Range over seed', src.size, 999);
 }
 
+// 8) A raw Emby /Videos/stream URL 302-redirects to a CDN. open()'s no-Range GET
+//    (un-preflighted, so it may follow the cross-origin redirect) lands on the CDN
+//    and response.url differs; HttpSource adopts it and Range-probes the CDN, never
+//    the un-followable Emby URL. This is the "CORS on playback" fix.
+{
+  const calls = [];
+  let call = 0;
+  const fetchMock = async (url, init) => {
+    calls.push({ url, range: init?.headers?.Range ?? null }); call++;
+    if (call === 1) return { ...resp(200), url: 'http://cdn/final?sig=abc' };                 // no-Range follow -> redirected
+    return resp(206, new Uint8Array([0, 0]), { 'content-range': 'bytes 0-1/2048' });          // Range probe on the CDN
+  };
+  const src = new HttpSource('http://emby/Videos/1/stream.mkv?api_key=t', { fetch: fetchMock });
+  await src.open();
+  check('redirect: no-Range follow ran first (no Range header)', calls[0].range, null);
+  check('redirect: adopted CDN url from response.url', src.url, 'http://cdn/final?sig=abc');
+  check('redirect: Range probe hit the CDN url', calls[1].url, 'http://cdn/final?sig=abc');
+  check('redirect: probe carried a Range header', calls[1].range, 'bytes=0-1');
+  check('redirect: size from the CDN probe', src.size, 2048);
+}
+
 console.log(failures ? `\n${failures} HTTPSOURCE CHECK(S) FAILED` : '\nALL HTTPSOURCE CHECKS PASSED');
 process.exit(failures ? 1 : 0);
