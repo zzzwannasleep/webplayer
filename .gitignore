@@ -37,3 +37,6 @@ shot*.png
 # Deployable build output. Reproduced by `npm run build`; CI rebuilds it, so it
 # is not committed.
 dist/
+
+# Local secrets -- Emby server lines / credentials. Never commit.
+*.env
