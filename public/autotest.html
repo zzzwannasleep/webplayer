@@ -38,7 +38,7 @@ const check = (label, actual, expected) => {
 const FILES = [
   { url: '/mozahngtantexiaoass.mkv', w: 1920, h: 1080, hdr: false, dv: false, fonts: 28, subs: 2, audioOk: true,  audio: 'AAC',   sub: 'ass' },
   { url: '/qinyinshaonvpgs.mkv',     w: 1920, h: 1080, hdr: false, dv: false, fonts: 0,  subs: 3, audioOk: true,  audio: 'FLAC',  sub: 'pgs' },
-  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs',
+  { url: '/houshi.mkv',              w: 3840, h: 2160, hdr: true,  dv: true,  fonts: 0,  subs: 4, audioOk: false, audio: 'E-AC3', sub: 'pgs', transcoded: true,
     hdr10plus: true, peakNits: 1000, maxCLL: 329, maxFALL: 142 },
 ];
 
@@ -71,6 +71,43 @@ function paintedPixels(canvas) {
 
 /** The canvas a renderer created next to the video. */
 const rendererCanvas = video => [...(video.parentNode?.querySelectorAll('canvas') ?? [])].pop();
+
+/**
+ * Brightness of the DECODED PICTURE, read off the element itself.
+ *
+ * This exists because "subtitles are painted" and "the film is still visible"
+ * are different claims, and this suite only ever asserted the first. It passed
+ * a build where turning on ASS left nothing on screen but the subtitles.
+ */
+function picture(video) {
+  const c = document.createElement('canvas');
+  c.width = 160; c.height = 90;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  try { g.drawImage(video, 0, 0, 160, 90); } catch (e) { return { ok: false, why: e.message }; }
+  const d = g.getImageData(0, 0, 160, 90).data;
+  let sum = 0, lit = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    sum += y; if (y > 12) lit++;
+  }
+  return { ok: true, meanY: +(sum / 14400).toFixed(1), litPct: +(100 * lit / 14400).toFixed(1) };
+}
+
+/** How much of the subtitle overlay is opaque. 100% means it hides the film. */
+function coverage(video) {
+  const canvas = rendererCanvas(video);
+  if (!canvas?.width) return { ok: false, why: 'no overlay canvas' };
+  const s = document.createElement('canvas');
+  const scale = Math.min(1, 480 / canvas.width);
+  s.width = Math.max(1, Math.round(canvas.width * scale));
+  s.height = Math.max(1, Math.round(canvas.height * scale));
+  const g = s.getContext('2d', { willReadFrequently: true });
+  try { g.drawImage(canvas, 0, 0, s.width, s.height); } catch (e) { return { ok: false, why: e.message }; }
+  const px = g.getImageData(0, 0, s.width, s.height).data;
+  let opaque = 0;
+  for (let i = 3; i < px.length; i += 4) if (px[i] > 16) opaque++;
+  return { ok: true, pct: +(100 * opaque / (s.width * s.height)).toFixed(2) };
+}
 
 /** Poll until the renderer has painted something, or give up. */
 async function waitForPaint(video, ms) {
@@ -131,6 +168,7 @@ for (const f of FILES) {
       say(`       DV profile ${info.dolbyVision.profile}`);
     }
     check(`${f.audio} audio accepted by MSE`, info.audio[0]?.supported, f.audioOk);
+    if (f.transcoded) say('  (E-AC3 will be decoded in wasm and re-encoded to Opus)');
 
     // --- the real test: does it actually decode and advance? --------------
     subs = new Subtitles(player, { log: (m, lvl) => say(`       [sub:${lvl ?? 'info'}] ${m}`) });
@@ -153,6 +191,19 @@ for (const f of FILES) {
     await waitFor(() => video.currentTime > afterSeek + 0.5, 20000, 'playback after seek');
     check(`seek to ${target.toFixed(0)}s resumed`, video.currentTime > target - 20, true);
     say(`       resumed at t=${video.currentTime.toFixed(2)}s`);
+
+    // Software-decoded audio: the only claim worth checking is that real audio
+    // data reached a SourceBuffer, not that no exception was thrown.
+    if (f.transcoded) {
+      await waitFor(() => player.transcoder?.encodedChunks > 0, 90000,
+                    'wasm decode + Opus encode to produce chunks')
+        .catch(e => { failures++; say(`  FAIL  ${e.message}`); });
+      check('transcoder produced Opus chunks', player.transcoder?.encodedChunks > 0, true);
+      const ab = player.transcoder?.sb?.buffered;
+      const secs = ab?.length ? ab.end(ab.length - 1) - ab.start(0) : 0;
+      say(`       ${player.transcoder?.encodedChunks} Opus chunks, ${secs.toFixed(1)}s buffered`);
+      check('transcoded audio reached the SourceBuffer', secs > 1, true);
+    }
 
     // --- subtitles --------------------------------------------------------
     // Turned on after the seek on purpose: the PGS tracks in these files have
@@ -279,33 +330,165 @@ for (const s of CODEC_SAMPLES) {
 }
 post();
 
-// --- the player UI boots ---------------------------------------------------
-// Everything above exercises the modules directly. index.html is the glue that
-// wires them to the DOM, and a typo there -- a bad import path, a selector that
-// matches nothing -- throws at module scope and leaves a blank page that no
-// module-level test would notice.
-say('\n=== public/index.html boots ===');
+// --- drive the real UI, the way a person does ------------------------------
+//
+// Everything above drives the modules directly. Every UI bug found so far was
+// invisible to that: the vendor bundles 404'd when the page was opened from
+// '/', and pressing play silently switched the chosen subtitle back off. Both
+// were reachable only by clicking, so this clicks.
+say('\n=== player UI, driven by clicking ===');
 try {
   const frame = document.createElement('iframe');
-  frame.style.cssText = 'width:900px;height:500px;border:1px solid #333';
+  frame.style.cssText = 'width:1100px;height:660px;border:1px solid #333';
   const errors = [];
   const loaded = new Promise(res => { frame.onload = res; });
   document.body.append(frame);
-  frame.src = '/public/index.html';
+  // The address a person is told to open, redirect and all -- not the direct
+  // path to index.html, which is exactly what hid the vendor 404s.
+  frame.src = '/';
   await loaded;
-  frame.contentWindow.addEventListener('error', e => errors.push(e.message));
-  frame.contentWindow.addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
+  const w = frame.contentWindow;
+  w.addEventListener('error', e => errors.push(e.message));
+  w.addEventListener('unhandledrejection', e => errors.push(String(e.reason?.message ?? e.reason)));
+  // '/' 302s to '/public/'. onload can fire for the document that then gets
+  // replaced, so the document has to be re-read after the page is really up --
+  // otherwise every getElementById returns null and the failure reads like the
+  // page is broken rather than like the harness looked at the wrong document.
+  await waitFor(() => w.player && frame.contentDocument.getElementById('url'), 20000, 'the page to boot');
+  const d = frame.contentDocument;
+  check('page booted', !!w.player, true);
+  check('served from /public/ so relative URLs resolve', d.baseURI.endsWith('/public/'), true);
 
-  // window.player is assigned on the last line of the module, so its presence
-  // means every import resolved and the whole script ran.
-  await waitFor(() => frame.contentWindow.player, 15000, 'index.html module to finish executing');
-  check('the page module executed to completion', !!frame.contentWindow.player, true);
-  const doc = frame.contentDocument;
-  for (const id of ['video', 'playBtn', 'file', 'extSub', 'loadAss', 'meta', 'tracks', 'log']) {
-    check(`#${id} exists`, !!doc.getElementById(id), true);
+  // Vendor bundles have to be reachable FROM THE PAGE, not from wherever the
+  // test happens to live.
+  for (const f of ['jassub.js', 'libpgs.js', 'jassub-worker.wasm']) {
+    const r = await w.fetch(new URL('vendor/' + f, d.baseURI)).catch(() => null);
+    check(`vendor/${f} reachable from the page`, r?.ok === true, true);
   }
-  await new Promise(r => setTimeout(r, 500));
-  check('no errors during boot', errors.length, 0);
+
+  // Load the way a person does now that the sample shortcuts are gone: paste a
+  // URL and press the button.
+  const urlBox = d.getElementById('url');
+  check('URL box present in the header', !!urlBox, true);
+  urlBox.value = '/mozahngtantexiaoass.mkv';
+  d.getElementById('loadUrl').click();
+  await waitFor(() => d.getElementById('subSel'), 40000, 'tracks to appear after load');
+  // Track pickers live behind the gear now, so opening it is part of the path.
+  const gear = d.getElementById('gearBtn'), menu = d.getElementById('picks');
+  check('track menu starts closed', menu.hidden, true);
+  gear.click();
+  check('gear opens the track menu', menu.hidden, false);
+  check('subtitle picker present', !!d.getElementById('subSel'), true);
+  check('audio picker present', !!d.getElementById('audioSel'), true);
+  check('video picker present', !!d.getElementById('videoSel'), true);
+  check('menu reports expanded to assistive tech', gear.getAttribute('aria-expanded'), 'true');
+
+  // Loading now starts playback on its own; there is no button outside the frame.
+  const fv = d.getElementById('video');
+  await waitFor(() => fv.readyState >= 2, 40000, 'the UI to decode a frame');
+  check('decoder produced a picture', fv.videoWidth > 0, true);
+  // readyState only says a frame is decodable. Whether the element is actually
+  // ADVANCING is a separate fact, and asserting the first while meaning the
+  // second is what made this block flaky.
+  await waitFor(() => !fv.paused && fv.currentTime > 0, 30000, 'playback to actually advance');
+  check('playback advancing from the UI', !fv.paused && fv.currentTime > 0, true);
+
+  // The native controls are gone, so everything they used to provide has to
+  // be exercised rather than assumed present.
+  check('in-frame controls visible once metadata arrives', d.getElementById('vctl').hidden, false);
+  const pp = d.getElementById('ppBtn');
+  // Icons are SVG now, so state is read from the accessible markup rather than
+  // from a glyph that renders differently on every platform.
+  const ppIcon = () => pp.querySelector('svg rect') ? 'pause' : 'play';
+  check('play/pause icon shows the pause state', ppIcon(), 'pause');
+  pp.click();
+  await waitFor(() => fv.paused, 5000, 'pause via the custom button');
+  check('custom pause button pauses', fv.paused, true);
+  // video.paused flips synchronously but the 'pause' EVENT is a task, so
+  // asserting the label straight after the click races the handler that
+  // updates it. Wait for the label itself.
+  await waitFor(() => ppIcon() === 'play', 5000, 'the icon to flip').catch(() => {});
+  check('icon flipped to play', ppIcon(), 'play');
+  pp.click();
+  await waitFor(() => !fv.paused, 5000, 'resume');
+  check('custom play button resumes', fv.paused, false);
+
+  // Space is the one keyboard binding a viewer will try without thinking.
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  await waitFor(() => fv.paused, 5000, 'space to pause');
+  check('space bar pauses', fv.paused, true);
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  await waitFor(() => !fv.paused, 5000, 'space to resume');
+
+  // Arrow keys must not scroll the page instead of seeking.
+  const before = fv.currentTime;
+  w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  await new Promise(r => setTimeout(r, 400));
+  check('right arrow seeks forward', fv.currentTime > before, true);
+
+  const w1 = d.getElementById('seekFill').style.width;
+  check('progress bar has been painted', w1 !== '' && w1 !== '0%', true);
+  check('fullscreen button present', !!d.getElementById('fsBtn'), true);
+  // Every icon has to be one consistent set, not a mix of glyphs and SVG.
+  const icons = [...d.querySelectorAll('#vctl .vbtn svg')];
+  check('all control icons are SVG', icons.length >= 4, true);
+  check('icons share one viewBox', new Set(icons.map(i => i.getAttribute('viewBox'))).size, 1);
+  check('icons share one stroke width', new Set(icons.map(i => i.getAttribute('stroke-width'))).size, 1);
+  check('seek bar has its own row', d.querySelector('#seek').getBoundingClientRect().top
+        < d.querySelector('.vrow').getBoundingClientRect().top, true);
+
+  const sel = d.getElementById('subSel');
+  const opt = [...sel.options].find(o => !o.disabled && o.value !== '-1');
+  check('an enabled subtitle option exists', !!opt, true);
+  // Sampled before subtitles so the comparison is against this film, at this
+  // moment -- an absolute brightness threshold would just be a guess about
+  // how dark a given scene is allowed to be.
+  const picBefore = picture(fv);
+  say(`       picture before subtitles: meanY=${picBefore.meanY} lit=${picBefore.litPct}%`);
+  sel.value = opt.value;
+  sel.dispatchEvent(new w.Event('change'));
+
+  // The claim is pixels on screen, not "no exception was thrown".
+  const paint = await waitForPaint(fv, 45000);
+  if (paint.ok) {
+    say(`       overlay ${paint.w}x${paint.h}, ${paint.opaque} opaque px`);
+    check('subtitle painted after selecting it in the UI', paint.opaque > 0, true);
+  } else {
+    failures++;
+    say(`  FAIL  overlay unreadable: ${paint.why}`);
+  }
+
+  // Subtitles must not cost the picture. Both halves are asserted because they
+  // fail differently: an overlay that paints the whole frame opaque, and a
+  // video element that has stopped producing pixels at all.
+  const cov = coverage(fv);
+  const picAfter = picture(fv);
+  say(`       overlay covers ${cov.pct}% of the frame; picture meanY=${picAfter.meanY} lit=${picAfter.litPct}%`);
+  check('overlay does not blanket the frame', cov.ok && cov.pct < 60, true);
+  check('picture still being decoded with subtitles on', picAfter.ok && picAfter.litPct > 20, true);
+  check('picture not blacked out by the overlay', picAfter.meanY > 8, true);
+
+  // Switching to the other subtitle track and back must keep drawing: each
+  // switch tears one renderer down and builds another on a live MediaSource.
+  const other = [...sel.options].find(o => !o.disabled && o.value !== '-1' && o.value !== opt.value);
+  if (other) {
+    sel.value = other.value;
+    sel.dispatchEvent(new w.Event('change'));
+    const paint2 = await waitForPaint(fv, 45000);
+    check('second subtitle track also paints', paint2.ok && paint2.opaque > 0, true);
+    sel.value = '-1';
+    sel.dispatchEvent(new w.Event('change'));
+    await new Promise(r => setTimeout(r, 1200));
+    check('turning subtitles off is honoured', sel.value, '-1');
+  }
+  // Escape must close the menu; a panel that only closes via its own button
+  // reads as stuck.
+  d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Escape closes the track menu', menu.hidden, true);
+  if (false) {
+  }
+
+  check('no errors while driving the UI', errors.length, 0);
   if (errors.length) say(`       ${errors.join(' | ')}`);
   frame.remove();
 } catch (e) {

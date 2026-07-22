@@ -1,0 +1,242 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>perfdiag</title>
+<style>
+/* The iframe is PINNED and the log scrolls beside it. Growing the log used to
+   push the player down the page, and Chromium stops producing frames for a
+   video element it is not compositing -- so windows 2..4 of the first run read
+   fps=0 for a player that was working fine. A perf harness that changes the
+   thing it measures is worse than no harness. */
+body{background:#111;color:#ddd;font:12px/1.5 Consolas,monospace;margin:0;
+     display:grid;grid-template-columns:940px minmax(0,1fr);height:100vh;overflow:hidden}
+#pane{padding:8px;overflow:hidden}
+iframe{width:920px;height:560px;border:1px solid #333}
+#out{margin:0;padding:8px;white-space:pre-wrap;overflow-y:auto;height:100vh;font-size:11px}
+</style>
+<div id="pane"></div>
+<pre id="out"></pre>
+<script type="module">
+// Measures the two reported failures instead of describing them:
+//   * "PGS 播放时画面卡、掉帧"     -> presented-frame rate in 30s windows, so a
+//                                     cost that GROWS with playback shows up as
+//                                     a trend rather than one ambiguous number
+//   * "ASS 时视频看不见只剩字幕"   -> the picture sampled at the SAME timestamp
+//                                     with subs off and on, plus how much of the
+//                                     overlay canvas is opaque
+//
+// Both drive the REAL page in an iframe. A standalone harness would miss
+// anything living in index.html's CSS, which is where the last three UI bugs
+// in this project actually were.
+const out = document.getElementById('out');
+// Posted after every line, not once at the end. The first version only posted
+// when it finished, so a hang -- await video.play() never settling, which is
+// exactly what happened -- produced twenty minutes of nothing at all. A
+// diagnostic that can lose its own findings is not a diagnostic.
+const post = () => fetch('/collect', { method: 'POST', body: out.textContent }).catch(() => {});
+const say = s => { out.textContent += s + '\n'; post(); };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+/** play() never rejects on a stalled MediaSource, so it is never awaited. */
+const play = v => { v.play().catch(() => {}); };
+
+async function waitFor(fn, ms, what) {
+  const end = performance.now() + ms;
+  while (performance.now() < end) { if (fn()) return true; await wait(120); }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** Brightness of the DECODED PICTURE, read straight off the element. */
+function videoPaint(v) {
+  const c = document.createElement('canvas');
+  c.width = 160; c.height = 90;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  try { g.drawImage(v, 0, 0, 160, 90); } catch (e) { return { err: e.message }; }
+  const d = g.getImageData(0, 0, 160, 90).data;
+  let lit = 0, sum = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    sum += y; if (y > 12) lit++;
+  }
+  return { lit, of: 160 * 90, meanY: +(sum / (160 * 90)).toFixed(1) };
+}
+
+/** What fraction of the subtitle overlay is opaque -- 100% means it hides the video. */
+function overlayCoverage(d, v) {
+  const canvas = [...(v.parentNode?.querySelectorAll('canvas') ?? [])].pop();
+  if (!canvas?.width) return { err: 'no overlay canvas' };
+  const s = document.createElement('canvas');
+  const scale = Math.min(1, 480 / canvas.width);
+  s.width = Math.max(1, Math.round(canvas.width * scale));
+  s.height = Math.max(1, Math.round(canvas.height * scale));
+  const g = s.getContext('2d', { willReadFrequently: true });
+  try { g.drawImage(canvas, 0, 0, s.width, s.height); } catch (e) { return { err: e.message }; }
+  const px = g.getImageData(0, 0, s.width, s.height).data;
+  let opaque = 0, solid = 0;
+  for (let i = 3; i < px.length; i += 4) { if (px[i] > 16) opaque++; if (px[i] > 240) solid++; }
+  const n = s.width * s.height;
+  return { w: canvas.width, h: canvas.height, n,
+           opaquePct: +(100 * opaque / n).toFixed(2), solidPct: +(100 * solid / n).toFixed(2) };
+}
+
+function stack(d) {
+  return [...d.getElementById('stage').children].map(el => {
+    const cs = d.defaultView.getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}`
+      + `${el.className ? '.' + String(el.className).split(' ').join('.') : ''}`
+      + ` pos=${cs.position} z=${cs.zIndex} op=${cs.opacity} bg=${cs.backgroundColor}`
+      + ` mix=${cs.mixBlendMode} rect=${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)}`;
+  });
+}
+
+async function openPlayer() {
+  const frame = document.createElement('iframe');
+  const loaded = new Promise(res => { frame.onload = res; });
+  document.getElementById('pane').replaceChildren(frame);
+  frame.src = '/';
+  await loaded;
+  const w = frame.contentWindow;
+  // '/' 302s to '/public/', so the document captured at onload can be the one
+  // that got replaced. Wait for the real page, then re-read it.
+  await waitFor(() => w.player && frame.contentDocument.getElementById('url'), 20000, 'boot');
+  return { frame, w, d: frame.contentDocument };
+}
+
+async function load(w, d, url) {
+  d.getElementById('url').value = url;
+  d.getElementById('loadUrl').click();
+  await waitFor(() => d.getElementById('subSel'), 60000, 'tracks');
+  const v = d.getElementById('video');
+  await waitFor(() => !v.paused && v.currentTime > 0.2, 90000, 'playback');
+  return v;
+}
+
+/** A cheap fingerprint of the current frame, to tell "frozen" from "slow". */
+function frameHash(v) {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 18;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  try { g.drawImage(v, 0, 0, 32, 18); } catch { return null; }
+  const d = g.getImageData(0, 0, 32, 18).data;
+  let h = 0;
+  for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7) | 0;
+  return h;
+}
+
+/**
+ * Presented frames per second of wall clock -- the number a viewer sees.
+ *
+ * Also samples the picture itself. getVideoPlaybackQuality() stops counting in
+ * situations that have nothing to do with playback being broken (an element the
+ * compositor has decided not to draw, for one), so a zero from it is only
+ * evidence of a freeze if the pixels agree.
+ */
+async function fpsWindow(v, secs, label) {
+  const a = v.getVideoPlaybackQuality(), t0 = v.currentTime, w0 = performance.now();
+  const hashes = new Set();
+  const sampler = setInterval(() => { const h = frameHash(v); if (h !== null) hashes.add(h); }, 500);
+  await wait(secs * 1000);
+  clearInterval(sampler);
+  const b = v.getVideoPlaybackQuality();
+  const total = b.totalVideoFrames - a.totalVideoFrames;
+  const drop = b.droppedVideoFrames - a.droppedVideoFrames;
+  const wall = (performance.now() - w0) / 1000, media = v.currentTime - t0;
+  const fps = total / wall;
+  // ~2 samples/s over the window: a live picture yields nearly as many distinct
+  // frames as samples, a frozen one yields 1.
+  const distinct = hashes.size, samples = Math.round(secs * 2);
+  say(`  ${label.padEnd(26)} fps=${fps.toFixed(1).padStart(5)} decoded=${String(total).padStart(4)}`
+    + ` dropped=${String(drop).padStart(3)} clock=${media.toFixed(1)}s/${wall.toFixed(1)}s`
+    + ` picture=${distinct}/${samples} distinct ${distinct <= 2 ? '<< FROZEN' : ''}`);
+  return { fps, drop, total, distinct, samples };
+}
+
+/** Seek and wait until the element has actually settled on a new frame. */
+async function seekTo(v, t) {
+  v.currentTime = t;
+  await waitFor(() => Math.abs(v.currentTime - t) < 1.5 && v.readyState >= 2, 60000, `seek to ${t}`);
+  await wait(2500);
+}
+
+async function pickSub(w, d, match) {
+  const sel = d.getElementById('subSel');
+  const opt = [...sel.options].find(o => !o.disabled && o.value !== '-1'
+    && (!match || o.textContent.toLowerCase().includes(match)));
+  if (!opt) throw new Error(`no subtitle option matching ${match}`);
+  sel.value = opt.value;
+  sel.dispatchEvent(new w.Event('change'));
+  return opt.textContent.trim();
+}
+
+try {
+  // ---------------------------------------------------------------- ASS ----
+  // Sampled at ONE timestamp both times. The first run compared two different
+  // moments of the film and reported a scene change as a rendering bug.
+  say('=== ASS: mozahngtantexiaoass.mkv (picture at a FIXED timestamp) ===');
+  {
+    const { frame, w, d } = await openPlayer();
+    const v = await load(w, d, '/mozahngtantexiaoass.mkv');
+    const T = 300;
+    await seekTo(v, T);
+    v.pause();
+    const before = videoPaint(v);
+    say(`  t=${v.currentTime.toFixed(1)}s subs OFF -> lit=${before.lit}/${before.of} meanY=${before.meanY}`);
+    say('  stage stack BEFORE:');
+    for (const l of stack(d)) say('    ' + l);
+
+    play(v);
+    say(`  enabled subtitle: ${await pickSub(w, d, null)}`);
+    await wait(15000);
+    await seekTo(v, T);
+    v.pause();
+    await wait(2000);
+    const after = videoPaint(v);
+    say(`  t=${v.currentTime.toFixed(1)}s subs ON  -> lit=${after.lit}/${after.of} meanY=${after.meanY}`);
+    say(`  overlay coverage: ${JSON.stringify(overlayCoverage(d, v))}`);
+    say('  stage stack AFTER:');
+    for (const l of stack(d)) say('    ' + l);
+    const r = d.getElementById('stage').getBoundingClientRect();
+    say(`  element at stage centre: ${d.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.outerHTML?.slice(0, 90)}`);
+    say(`  VERDICT: picture ${after.meanY < before.meanY * 0.5 ? 'LOST' : 'intact'}`
+      + ` (meanY ${before.meanY} -> ${after.meanY})`);
+
+    // The subtitle raster is what the cap is about. Without it libass is asked
+    // for a buffer as tall as the displayed video times devicePixelRatio, with
+    // no ceiling -- and that buffer is recomposited every video frame.
+    const jc = [...d.querySelectorAll('#stage canvas')].pop();
+    const box = d.getElementById('video').getBoundingClientRect();
+    say(`  DPR=${w.devicePixelRatio} video box ${Math.round(box.width)}x${Math.round(box.height)}`
+      + ` -> uncapped raster would be ${Math.round(box.height * w.devicePixelRatio)} lines`);
+    say(`  libass raster actually allocated: ${jc?.width}x${jc?.height}`);
+    say(`  CAP: ${jc && jc.height <= 1080 ? 'held' : 'NOT HELD'}`
+      + `${box.height * w.devicePixelRatio > 1080 ? '' : '  (vacuous here -- run with -DeviceScale 2)'}`);
+    play(v);
+    await fpsWindow(v, 20, 'ASS subs ON');
+    frame.remove();
+  }
+
+  // ---------------------------------------------------------------- PGS ----
+  // Four minutes in 30s windows: the suspected cost rebuilds and re-parses the
+  // WHOLE .sup every 100ms from a list that never shrinks, so it should show up
+  // as fps falling steadily rather than as one bad number.
+  say('\n=== PGS: houshi.mkv 3840x2160 HDR + 5.1 E-AC3, 30s windows ===');
+  {
+    const { frame, w, d } = await openPlayer();
+    const v = await load(w, d, '/houshi.mkv');
+    say(`  ${v.videoWidth}x${v.videoHeight}`);
+    await wait(15000);                       // let buffering and ffmpeg.wasm settle
+    await fpsWindow(v, 30, 'baseline, subs OFF');
+    say(`  enabled subtitle: ${await pickSub(w, d, null)}`);
+    for (let i = 1; i <= 4; i++) await fpsWindow(v, 30, `subs ON window ${i} (${i * 30}s)`);
+    say(`  feed: ${w.subs.active?.feed?.packets.length} sets held,`
+      + ` ${w.subs.active?.feed?.reloads} reloads`);
+    say(`  overlay coverage: ${JSON.stringify(overlayCoverage(d, v))}`);
+    frame.remove();
+  }
+  say('\nDIAG DONE');
+} catch (e) {
+  say(`\nDIAG FAILED: ${e.message}\n${e.stack}`);
+  say('DIAG DONE');
+}
+post();
+document.title = 'DONE';
+</script>

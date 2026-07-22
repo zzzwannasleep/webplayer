@@ -56,20 +56,69 @@ export class FileSource {
   }
 }
 
-/** Random-access byte source over HTTP, using Range requests. */
+/**
+ * Random-access byte source over HTTP, using Range requests.
+ *
+ * A signed/tokenised direct link expires; a long film or a seek after the TTL
+ * would otherwise fail with 401/403/410 mid-playback. So the URL that is
+ * actually fetched can be REFRESHED: pass `resolve`, an async function that
+ * turns the original (page) URL into a fresh `{ url, expiresAt? }`. The direct
+ * link is re-resolved before a request that would race the expiry, and again if
+ * a request is rejected as expired -- then the SAME byte range is retried. The
+ * content is identical across re-signs, so offsets and size stay stable. With
+ * no `resolve`, this behaves as a plain Range fetcher (a direct URL).
+ *
+ * `resolve` is deliberately transport-agnostic: it can call a Cloudflare Worker,
+ * a self-hosted Node endpoint, or anything else. The client does not care where
+ * the extractor runs.
+ */
+const EXPIRED = new Set([401, 403, 410]);
+
 export class HttpSource {
-  constructor(url) { this.url = url; this.size = 0; this.name = url.split('/').pop(); }
+  constructor(url, { resolve = null, fetch: fetchImpl = null } = {}) {
+    this.origin = url;        // the URL the user gave; handed to resolve()
+    this.url = url;           // the URL actually fetched (a direct link)
+    this.resolve = resolve;
+    this.expiresAt = 0;       // ms epoch; 0 = unknown/never
+    this.size = 0;
+    this.name = url.split('/').pop();
+    // Wrap, don't capture: `const f = globalThis.fetch; f(...)` throws "Illegal
+    // invocation" because fetch must run with globalThis as its receiver.
+    this._fetch = fetchImpl || ((input, init) => globalThis.fetch(input, init));
+  }
+
+  async _refresh() {
+    if (!this.resolve) return;
+    const r = await this.resolve(this.origin);
+    if (!r?.url) throw new Error('resolve() returned no url');
+    this.url = r.url;
+    this.expiresAt = r.expiresAt || 0;
+  }
+
+  /** True if the link is known to expire within `ms` from now. */
+  _stale(ms = 5000) { return this.expiresAt > 0 && Date.now() > this.expiresAt - ms; }
+
   async open() {
-    const r = await fetch(this.url, { method: 'HEAD' });
+    if (this.resolve) await this._refresh();   // turn the page URL into a direct link first
+    const r = await this._fetch(this.url, { method: 'HEAD' });
     if (!r.ok) throw new Error(`HEAD ${this.url} -> ${r.status}`);
     if (r.headers.get('accept-ranges') !== 'bytes') throw new Error('server does not support Range requests');
     this.size = Number(r.headers.get('content-length'));
     return this;
   }
+
   async read(offset, length) {
     const end = Math.min(offset + length, this.size) - 1;
     if (offset > end) return new Uint8Array(0);
-    const r = await fetch(this.url, { headers: { Range: `bytes=${offset}-${end}` } });
+    const range = `bytes=${offset}-${end}`;
+    // Refresh proactively if the link is about to expire, to avoid a wasted
+    // request and a visible stall at the exact wrong moment (a seek).
+    if (this._stale()) await this._refresh();
+    let r = await this._fetch(this.url, { headers: { Range: range } });
+    if (EXPIRED.has(r.status) && this.resolve) {
+      await this._refresh();                    // link died early -- get a fresh one and retry the same bytes
+      r = await this._fetch(this.url, { headers: { Range: range } });
+    }
     if (!r.ok) throw new Error(`GET range -> ${r.status}`);
     return new Uint8Array(await r.arrayBuffer());
   }
@@ -624,9 +673,23 @@ export class MatroskaDemuxer {
       for (const s of sizes) { frames.push(buf.subarray(r.pos, r.pos + s)); r.pos += s; }
     }
 
-    // Laced frames share one timestamp in the container; spread them across the
-    // block duration so audio does not pile up at a single PTS.
-    const step = frames.length > 1 && duration ? duration / frames.length : 0;
+    // Laced frames share ONE timestamp in the container; they must be spread
+    // out or they pile up at a single PTS with zero duration. When that happens
+    // the MP4 remuxer can only recover a duration from the gap to the NEXT
+    // block, so each ~1024-sample AAC frame is handed the whole block's worth of
+    // time -- the audio timeline then races ~(sampleRate/1000)x ahead of video,
+    // the video buffer starves, and playback freezes after tens of seconds.
+    // A BlockGroup carries a Duration to divide; a SimpleBlock (the common case)
+    // does not, so fall back to the track's DefaultDuration, which is exactly
+    // one frame's worth of time.
+    let step = 0;
+    if (frames.length > 1) {
+      if (duration) step = duration / frames.length;
+      else {
+        const td = this.tracks.find(t => t.number === track);
+        if (td?.defaultDuration) step = td.defaultDuration / 1e9;
+      }
+    }
     for (let i = 0; i < frames.length; i++) {
       if (!frames[i].length) continue;
       yield { track, time: time + step * i, duration: step || duration, keyframe, data: frames[i] };

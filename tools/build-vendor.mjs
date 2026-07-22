@@ -42,4 +42,28 @@ for (const f of ['libpgs.js', 'libpgs.worker.js']) {
   copyFileSync(`node_modules/libpgs/dist/${f}`, `${OUT}/${f}`);
 }
 
+// ffmpeg.wasm, for the codecs no browser decodes: E-AC3, AC-3, DTS, TrueHD.
+//
+// The single-threaded core is deliberate. The multi-threaded one needs
+// SharedArrayBuffer, which needs COOP/COEP, which would break the plain
+// <video> and blob-URL paths this player is built on -- and the probe
+// measured crossOriginIsolated as false here.
+//
+// This core is GPL-2.0-or-later, unlike everything else in the repository,
+// which is why it lives on its own branch. See README.
+await build({
+  entryPoints: { 'ffmpeg': 'node_modules/@ffmpeg/ffmpeg/dist/esm/index.js' },
+  outdir: OUT,
+  bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning',
+});
+// Its worker is loaded by URL, so it is bundled separately rather than inlined.
+await build({
+  entryPoints: { 'ffmpeg-worker': 'node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js' },
+  outdir: OUT,
+  bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning',
+});
+for (const f of ['ffmpeg-core.js', 'ffmpeg-core.wasm']) {
+  copyFileSync(`node_modules/@ffmpeg/core/dist/esm/${f}`, `${OUT}/${f}`);
+}
+
 console.log(`vendor bundles written to ${OUT}`);

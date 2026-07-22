@@ -83,15 +83,24 @@ export class Subtitles {
 
   _startPgs() {
     let renderer = null;
-    // libpgs re-parses the whole .sup on every load, so the feed batches
-    // packets instead of rebuilding once per subtitle. Until the renderer
-    // exists the feed just accumulates -- it holds every packet it was given.
+    // libpgs re-parses the whole .sup and re-decodes every bitmap in it on
+    // each load, so the feed keeps only a window around the playhead and
+    // batches changes. Until the renderer exists it just accumulates.
     const feed = new PgsFeed(sup => {
       if (!renderer) return;
       renderer.loadFromBuffer(sup.buffer.slice(sup.byteOffset, sup.byteOffset + sup.length));
       this.log(`PGS: ${feed.packets.length} display sets loaded (${(sup.length / 1024) | 0} KB)`);
     });
-    const entry = { feed, renderer: null };
+    // The window can only follow the playhead if something tells it where the
+    // playhead is. timeupdate fires about four times a second, which is far
+    // more often than the window boundary moves.
+    const onTime = () => feed.setTime(this.video.currentTime);
+    this.video.addEventListener('timeupdate', onTime);
+    this.video.addEventListener('seeked', onTime);
+    const entry = { feed, renderer: null, detach: () => {
+      this.video.removeEventListener('timeupdate', onTime);
+      this.video.removeEventListener('seeked', onTime);
+    } };
     entry.ready = (async () => {
       const { PgsRenderer } = await import(`${this.vendor}/libpgs.js`);
       renderer = new PgsRenderer({
@@ -122,7 +131,7 @@ export class Subtitles {
     if (!a) return;
     try {
       await a.ready.catch(() => {});   // never dispose a half-built renderer
-      if (a.feed) { a.feed.reset(); a.renderer?.dispose(); }
+      if (a.feed) { a.detach?.(); a.feed.reset(); a.renderer?.dispose(); }
       else await a.renderer.destroy();
     } catch (e) { this.log(`subtitle teardown: ${e.message}`, 'warn'); }
   }

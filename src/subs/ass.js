@@ -26,6 +26,9 @@
 /** Fields of a Matroska ASS block, in order. Start/End are deliberately absent. */
 const FIELDS = 8;   // ReadOrder, Layer, Style, Name, MarginL, MarginR, MarginV, then Text
 
+/** Tallest subtitle raster libass is asked for, whatever the display. */
+export const ASS_MAX_RENDER_HEIGHT = 1080;
+
 /**
  * Split one Matroska ASS packet.
  * Text may contain commas, so only the first 8 fields are split off.
@@ -59,7 +62,8 @@ export class AssOverlay {
    * @param fonts    embedded font files as Uint8Array, from player.fontAttachments()
    * @param vendor   URL prefix where the bundled JASSUB files live
    */
-  constructor(video, header, fonts = [], { vendor, log = () => {} } = {}) {
+  constructor(video, header, fonts = [],
+              { vendor, log = () => {}, maxRenderHeight = ASS_MAX_RENDER_HEIGHT } = {}) {
     vendor = new URL(vendor ?? 'vendor/', document.baseURI).href.replace(/\/$/, '');
     this.log = log;
     this.video = video;
@@ -87,6 +91,15 @@ export class AssOverlay {
         // Asking the OS for fonts needs a permission prompt and would make a
         // missing embedded font look like it worked on this machine only.
         queryFonts: false,
+        // Cap the subtitle raster. JASSUB defaults maxRenderHeight to 0 --
+        // no limit -- so it rasterises at the displayed height times the
+        // device pixel ratio: 2160 lines on a 4K screen, 4320 on a HiDPI
+        // panel in fullscreen. That is a full-frame RGBA composite per video
+        // frame on top of a 4K HEVC decode, and it is the subtitle layer that
+        // wins, because it is the one with a live requestVideoFrameCallback.
+        // Text rasterised at 1080 and scaled up is very slightly softer; a
+        // picture that has stopped updating is not a tradeoff at all.
+        maxRenderHeight,
       });
       await this.jassub.ready;
       if (this._destroyed) return;

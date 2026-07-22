@@ -271,11 +271,31 @@ export class TrackRemuxer {
    * them out in decode order recovers DTS exactly; CTS is then PTS - DTS, which
    * is always >= 0 (so trun version 0 with unsigned offsets stays valid).
    */
-  flush() {
+  flush(force = false) {
     if (!this.pending.length) return null;
     const ts = this.timescale;
-    const blocks = this.pending;
-    this.pending = [];
+
+    // A fragment's DTS is recovered by sorting its PTS, which is only correct
+    // when the fragment is a whole number of CLOSED GOPs -- the trick relies on
+    // {DTS} == {PTS} as sets, true only when every frame's references are inside
+    // the fragment. The fill loop flushes per fixed-size read chunk, which cuts
+    // GOPs anywhere; a fragment that starts or ends mid-GOP gets wrong DTS, and
+    // the browser silently refuses to extend the buffered range past the first
+    // fragment -- playback freezes a few seconds in. So for video, emit only up
+    // to the last keyframe and keep the trailing partial GOP for next time.
+    // Audio frames are all independent, so they always flush whole. `force`
+    // drains the tail at end-of-stream.
+    let blocks;
+    if (this.kind === 'video' && !force) {
+      let lastKf = -1;
+      for (let i = this.pending.length - 1; i > 0; i--) if (this.pending[i].keyframe) { lastKf = i; break; }
+      if (lastKf <= 0) return null;            // no complete GOP buffered yet
+      blocks = this.pending.slice(0, lastKf);
+      this.pending = this.pending.slice(lastKf);
+    } else {
+      blocks = this.pending;
+      this.pending = [];
+    }
 
     const pts = blocks.map(b => Math.round(b.time * ts));
     const dts = [...pts].sort((a, b) => a - b);

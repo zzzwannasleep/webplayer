@@ -29,3 +29,11 @@ samples/
 *.header.ass
 houshisrt.vtt
 probe-result.txt
+*-out.txt
+
+# Screenshots emitted by tools/shot-page.ps1 while diagnosing compositing bugs.
+shot*.png
+
+# Deployable build output. Reproduced by `npm run build`; CI rebuilds it, so it
+# is not committed.
+dist/

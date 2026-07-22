@@ -37,13 +37,24 @@ createServer((req, res) => {
     return;
   }
 
-  // normalize() collapses ../ so a crafted path cannot escape ROOT
-  const path = join(ROOT, normalize(url === '/' ? '/index.html' : url));
+  // '/' REDIRECTS to the player rather than serving it in place. Serving
+  // index.html at '/' makes document.baseURI '/', and the subtitle renderers
+  // resolve their wasm bundles against it -- so every one of them 404s and
+  // subtitles silently never appear. The page must load from the directory it
+  // actually lives in.
+  if (url === '/' || url === '/public') { res.writeHead(302, { Location: '/public/' }).end(); return; }
+  let path = join(ROOT, normalize(url));
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
 
   let st;
   try { st = statSync(path); } catch { res.writeHead(404).end('not found'); return; }
-  if (st.isDirectory()) { res.writeHead(404).end('not found'); return; }
+  // A directory request serves its index.html rather than 404ing. Browsers
+  // and humans both write /public/ far more often than /public/index.html.
+  if (st.isDirectory()) {
+    const idx = join(path, 'index.html');
+    try { st = statSync(idx); path = idx; }
+    catch { res.writeHead(404).end('not found'); return; }
+  }
 
   const type = MIME[extname(path).toLowerCase()] ?? 'application/octet-stream';
   // COOP/COEP kept OFF by default: turning them on breaks any cross-origin

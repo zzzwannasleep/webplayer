@@ -28,6 +28,14 @@ $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $proc = Start-Process $edge -PassThru -ArgumentList `
   '--new-window', '--window-position=0,0', '--window-size=1280,900',
   '--autoplay-policy=no-user-gesture-required',
+  # Chromium marks an occluded window hidden, and the player waits for
+  # visibility by design -- so anything that steals focus during a run stalls
+  # it forever with no error. These keep the page live regardless of what else
+  # is on screen, which is the difference between a flaky harness and a real one.
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+  '--disable-background-timer-throttling',
+  '--disable-features=CalculateNativeWinOcclusion',
   "http://localhost:8080/$Page"
 
 # Pull the window to the front, then keep it there: Edge spawns several

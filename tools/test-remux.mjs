@@ -79,7 +79,7 @@ for (const [file, exp] of Object.entries(FILES)) {
       rx2.push(b); n++;
       if (rx2.pendingCount >= 120) parts.push(rx2.flush());
     }
-    const tail = rx2.flush(); if (tail) parts.push(tail);
+    const tail = rx2.flush(true); if (tail) parts.push(tail);   // force-drain the trailing GOP, as the player does at EOF
     if (!n) { console.log(`  --   ${label}: no samples`); continue; }
 
     let total = 0; for (const p of parts) total += p.length;

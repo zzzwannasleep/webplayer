@@ -1,0 +1,156 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>playback health diagnostic</title>
+<!-- Long-window playback health. The 3-second sample last time was too short to
+     catch "smooth for seconds, then stutters" -- the period IS seconds. This
+     runs ~60s and records the signals that separate the two competing causes:
+
+       * main-thread jank (demux/remux blocking the compositor) -> longtasks,
+         buffer stays healthy, frames stop advancing during the blocked window
+       * bad remux (timeline gaps) -> buffered splits into >1 range, the browser
+         jumps currentTime over the hole, and eventually a hole it cannot jump
+         freezes playback.
+-->
+<style>
+  body { margin:0; background:#111; color:#ddd; font:12px ui-monospace,Consolas,monospace; }
+  #pane { display:grid; grid-template-columns:600px 1fr; gap:8px; height:100vh; }
+  #frame { width:580px; height:340px; border:0; background:#000; }
+  #log { overflow:auto; white-space:pre-wrap; padding:8px; }
+  .ok{color:#5fd68a} .bad{color:#ff6b63} .hi{color:#f0b429} .dim{color:#8a95a3}
+</style>
+<div id="pane">
+  <div><iframe id="frame"></iframe></div>
+  <div id="log"></div>
+</div>
+<script type="module">
+const out = document.getElementById('log');
+const post = () => fetch('/collect', { method:'POST', body: out.textContent }).catch(()=>{});
+const say = (m, c='') => { const d=document.createElement('div'); if(c)d.className=c; d.textContent=m; out.append(d); out.scrollTop=out.scrollHeight; post(); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const P = new URLSearchParams(location.search);
+const FILE = 'http://localhost:8080/' + (P.get('file') || 'houshi.mkv');
+const DUR = (Number(P.get('dur')) || 55) * 1000;
+const frame = document.getElementById('frame');
+frame.src = P.get('app') || '/public/index.html';   // ?app=/dist/index.html verifies the built site
+
+async function wait(cond, ms, step=200){ const end=performance.now()+ms; while(performance.now()<end){ try{ if(await cond()) return true; }catch{} await sleep(step);} return false; }
+
+async function run() {
+  say('playback health diagnostic — ' + FILE);
+  await wait(() => frame.contentWindow?.player && frame.contentDocument?.getElementById('url'), 15000);
+  const w = frame.contentWindow, d = frame.contentDocument;
+  if (!w?.player) { say('player global missing','bad'); return say('DIAG DONE'); }
+
+  d.getElementById('url').value = FILE;
+  d.getElementById('loadUrl').click();
+  if (!await wait(() => w.player.info, 60000)) {
+    say('never parsed','bad');
+    const lg = d.getElementById('log')?.textContent || '';
+    for (const l of lg.split('\n').filter(Boolean).slice(-12)) say('  '+l,'dim');
+    return say('DIAG DONE');
+  }
+  const I = w.player.info;
+  say(`parsed: ${I.name} | ${I.video[0]?.label} | ${I.audio[0]?.label||'no audio'}`);
+  say(`HDR: ${I.hdr?(I.hdr.transfer+' '+I.hdr.bitDepth+'-bit'):'SDR'}  video supported=${I.video[0]?.supported} audio supported=${I.audio[0]?.supported}`, I.hdr?'hi':'');
+
+  const video = d.getElementById('video');
+  await wait(() => video.videoWidth > 0, 30000);
+  try { await video.play(); } catch {}
+
+  // event counters + main-thread longtask observer (same-origin iframe shares
+  // this event loop, so tasks are attributable here)
+  let waitingN=0, stalledN=0; const lt=[];
+  video.addEventListener('waiting', ()=>waitingN++);
+  video.addEventListener('stalled', ()=>stalledN++);
+  try { new w.PerformanceObserver(list=>{ for(const e of list.getEntries()) lt.push(e.duration); }).observe({entryTypes:['longtask']}); }
+  catch(e){ say('no longtask observer: '+e.message,'dim'); }
+
+  // wait for genuine playback before the clock starts
+  await wait(async()=>{ if(video.readyState<3||video.paused){try{await video.play();}catch{} return false;} const a=video.getVideoPlaybackQuality().totalVideoFrames; await sleep(400); return video.getVideoPlaybackQuality().totalVideoFrames>a; }, 25000, 400);
+
+  // Audio path: houshi's EAC3 is MSE-unsupported, so it goes through the wasm
+  // transcoder (its own SourceBuffer). If that worker can't keep up, the AUDIO
+  // buffer starves while video stays full -- audible stutter the frame metric
+  // can't see. Report every SourceBuffer's own fill separately.
+  const sbAhead = (sb) => { try { const b=sb.buffered, t=video.currentTime; for(let i=0;i<b.length;i++) if(t>=b.start(i)-0.1&&t<=b.end(i)) return b.end(i)-t; } catch{} return 0; };
+  const audioSbs = () => { const out=[]; for(const s of w.player.streams) if(s.kind==='audio') out.push(['vid-audio',s.sb]); if(w.player.transcoder?.sb) out.push(['transcode',w.player.transcoder.sb]); return out; };
+  const vidSb = () => { for(const s of w.player.streams) if(s.kind==='video') return s.sb; return null; };
+  say(`audio path: ${w.player.transcoder ? 'SOFTWARE TRANSCODE (wasm) -> '+w.player.transcoder.mime : (w.player.streams.some(s=>s.kind==='audio')?'native SourceBuffer':'NO AUDIO')}`, w.player.transcoder?'hi':'');
+  for (const s of w.player.streams) say(`  stream: ${s.mime} (${s.kind})`, 'dim');
+
+  // Seek test: rewind was freezing. After each seek, playback must RESUME
+  // (currentTime advances) within a few seconds.
+  if (P.get('seek')) {
+    const resumes = async (label, to) => {
+      const before = video.getVideoPlaybackQuality().totalVideoFrames;
+      video.currentTime = to;
+      try { await video.play(); } catch {}
+      const ok = await wait(() => video.getVideoPlaybackQuality().totalVideoFrames > before + 5 && Math.abs(video.currentTime - to) < 8 || video.currentTime > to + 0.5, 12000, 250);
+      say(`  ${label} -> ${to}s: ${ok ? 'RESUMED' : 'FROZE'} (now t=${video.currentTime.toFixed(1)}s, +${video.getVideoPlaybackQuality().totalVideoFrames-before} frames)`, ok ? 'ok' : 'bad');
+      return ok;
+    };
+    say(''); say('=== SEEK TEST (rewind must not freeze) ===','hi');
+    let all = true;
+    all = await resumes('play then rewind', 3) && all;
+    all = await resumes('fast-forward', Math.min(DUR/1000+30, 120)) && all;
+    all = await resumes('rewind again', 8) && all;
+    all = await resumes('rewind to start', 1) && all;
+    say(all ? 'SEEK TEST PASSED' : 'SEEK TEST FAILED', all ? 'ok' : 'bad');
+    return say('DIAG DONE');
+  }
+
+  say(''); say(`=== sampling ${DUR/1000}s (t = currentTime; look for jumps, gaps, drops, freezes) ===`,'hi');
+  const q0=video.getVideoPlaybackQuality();
+  let prevT=video.currentTime, prevWall=performance.now();
+  let jumps=0, maxRanges=1, frozenFor=0, worstFreeze=0, drops0=q0.droppedVideoFrames, dec0=q0.totalVideoFrames;
+  let lastDropWin=drops0, lastDecWin=dec0, lastLtLen=0;
+  const start=performance.now();
+  let tick=0;
+  while (performance.now()-start < DUR) {
+    await sleep(500);
+    const now=performance.now(), t=video.currentTime;
+    const dWall=(now-prevWall)/1000, dT=t-prevT;
+    // browser jumped the playhead: currentTime advanced much more than wall time
+    if (dT - dWall > 0.35 && !video.seeking) { jumps++; say(`  ! POSITION JUMP: +${dT.toFixed(2)}s in ${dWall.toFixed(2)}s wall (buffered gap-skip)`, 'bad'); }
+    // frozen: not paused but currentTime not advancing
+    if (!video.paused && dT < 0.02) { frozenFor += dWall; worstFreeze=Math.max(worstFreeze,frozenFor); } else frozenFor=0;
+    const b=video.buffered; maxRanges=Math.max(maxRanges,b.length);
+    prevT=t; prevWall=now;
+    if (++tick % 6 === 0) {   // ~ every 3s
+      const q=video.getVideoPlaybackQuality();
+      const decWin=q.totalVideoFrames-lastDecWin, dropWin=q.droppedVideoFrames-lastDropWin, ltWin=lt.length-lastLtLen;
+      const ltMs=lt.slice(lastLtLen).reduce((a,c)=>a+c,0);
+      let ahead=0; for(let i=0;i<b.length;i++) if(t>=b.start(i)-0.1&&t<=b.end(i)) ahead=b.end(i)-t;
+      const vsb=vidSb(), va=vsb?sbAhead(vsb):-1;
+      const aud=audioSbs().map(([n,sb])=>`${n}=${sbAhead(sb).toFixed(1)}s(${sb.buffered.length}r)`).join(' ');
+      // audio starving while video is full == the wasm transcoder can't keep up
+      const audioStarve = audioSbs().some(([,sb])=>sbAhead(sb)<3) && va>8;
+      const flag = (decWin<30 || dropWin>2 || b.length>1 || audioStarve) ? 'bad' : (ltMs>400?'hi':'');
+      say(`  t=${t.toFixed(1)}s dec/3s=${decWin} drop/3s=${dropWin} elem=${ahead.toFixed(1)}s vid=${va.toFixed(1)}s ${aud} lt=${ltMs|0}ms rs=${video.readyState}${audioStarve?' <-AUDIO STARVED':''}`, flag);
+      lastDecWin=q.totalVideoFrames; lastDropWin=q.droppedVideoFrames; lastLtLen=lt.length;
+      if (tick===6) { for (const [nm,sb] of audioSbs()) { const b=sb.buffered; let r=''; for(let i=0;i<Math.min(b.length,6);i++) r+=`[${b.start(i).toFixed(1)},${b.end(i).toFixed(1)}] `; say(`    ${nm} SB: ${b.length} ranges ${r}${b.length>6?'...':''}`,'dim'); } }
+      if (video.error) { say('  video.error '+video.error.code+': '+(video.error.message||''),'bad'); break; }
+      if (w.player.mediaSource && w.player.mediaSource.readyState!=='open') say('  MediaSource='+w.player.mediaSource.readyState,'bad');
+    }
+  }
+
+  const q1=video.getVideoPlaybackQuality();
+  const totalDec=q1.totalVideoFrames-dec0, totalDrop=q1.droppedVideoFrames-drops0;
+  const ltTotal=lt.reduce((a,c)=>a+c,0), ltBig=lt.filter(x=>x>100).length;
+  say(''); say('=== SUMMARY ===','hi');
+  say(`decoded ${totalDec} frames, dropped ${totalDrop} (${(100*totalDrop/Math.max(1,totalDec+totalDrop)).toFixed(1)}%)`, totalDrop>totalDec*0.02?'bad':'ok');
+  say(`main-thread longtasks: ${lt.length} totalling ${ltTotal|0}ms, ${ltBig} over 100ms, worst ${Math.max(0,...lt)|0}ms`, ltBig>0?'bad':'ok');
+  say(`position jumps (gap-skips): ${jumps}`, jumps>0?'bad':'ok');
+  say(`max simultaneous buffered ranges: ${maxRanges} (>1 means timeline holes)`, maxRanges>1?'bad':'ok');
+  say(`worst freeze: ${worstFreeze.toFixed(1)}s   waiting events: ${waitingN}   stalled: ${stalledN}`, worstFreeze>1||waitingN>3?'bad':'ok');
+  say(`final: currentTime=${video.currentTime.toFixed(1)}s readyState=${video.readyState} paused=${video.paused} error=${video.error?video.error.code:'none'} MediaSource=${w.player.mediaSource?.readyState}`, video.error?'bad':'');
+  // The player's own fill log -- fill passes, parse errors, append failures,
+  // endOfStream -- says why the loop stopped feeding video.
+  const plog = d.getElementById('log')?.textContent || '';
+  const lines = plog.split('\n').filter(Boolean);
+  say(''); say('=== player log (tail) ===','hi');
+  for (const l of lines.slice(-22)) say('  '+l,'dim');
+  say('DIAG DONE');
+}
+run().catch(e=>{ say('crashed: '+(e?.stack||e),'bad'); say('DIAG DONE'); });
+</script>

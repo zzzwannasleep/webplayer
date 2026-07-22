@@ -86,7 +86,7 @@ for (const exp of VIDEO) {
     if (b.time - t0 > 4) break;
     rx.push(b); n++;
   }
-  const tail = rx.flush(); if (tail) parts.push(tail);
+  const tail = rx.flush(true); if (tail) parts.push(tail);   // force-drain the trailing GOP, as the player does at EOF
   let total = 0; for (const p of parts) total += p.length;
   const path = `${OUT}/${exp.file.replace('.mkv', '')}.mp4`;
   writeFileSync(path, Buffer.concat(parts.map(Buffer.from), total));

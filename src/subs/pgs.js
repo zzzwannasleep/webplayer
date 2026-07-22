@@ -74,39 +74,97 @@ export function packetsToSup(packets) {
 
 /**
  * Accumulates PGS packets as they arrive from the demuxer and keeps a decoder
- * fed with a growing .sup stream.
+ * fed with a .sup stream covering the playhead.
  *
- * The player reads sequentially and drops everything on a seek, so packets
- * arrive incrementally and restart from the seek point. Each PGS display set
- * is self-contained, so a decoder handed only the sets around the current
- * position renders correctly -- unlike ASS, nothing depends on earlier state.
+ * libpgs has no incremental API: loadFromBuffer() re-parses the whole stream
+ * and re-decodes every RLE bitmap in it. The first version of this class kept
+ * every packet of the film and reloaded all of them every 100 ms, so the cost
+ * of displaying one subtitle grew with how long the film had been playing --
+ * quadratic, and on a 4K HDR file it ate enough main-thread time to visibly
+ * drop frames after a few minutes. It also never de-duplicated, so every seek
+ * and every backfill appended a second copy of a region it already held.
+ *
+ * A PGS display set is entirely self-contained -- unlike ASS, nothing depends
+ * on earlier state -- so only the sets around the playhead need to be loaded.
+ * Keeping a bounded window makes each reload a fixed, small cost no matter how
+ * long playback has been running.
  */
 export class PgsFeed {
-  /** @param onUpdate called with the full .sup bytes whenever new packets land. */
-  constructor(onUpdate) {
+  /**
+   * @param onUpdate called with the full .sup bytes whenever the window changes
+   * @param behind   seconds to keep behind the playhead (a set already on
+   *                 screen must stay loaded or it would blink out)
+   * @param ahead    seconds to keep ahead, which is the player's read-ahead
+   */
+  constructor(onUpdate, { behind = 30, ahead = 120 } = {}) {
     this.onUpdate = onUpdate;
     this.packets = [];
     this.bad = 0;
+    this.reloads = 0;
+    this._keys = new Set();
+    this._behind = behind;
+    this._ahead = ahead;
+    this._time = 0;
+    this._dirty = false;
     this._timer = null;
   }
 
+  /**
+   * Identity of a display set. The block timestamp alone is not enough: a
+   * PGS track can carry a clear-screen set at the same timestamp as the set
+   * that replaces it.
+   */
+  static key(p) { return `${Math.round(p.time * 1000)}:${p.data.length}`; }
+
   push(packet) {
     if (!splitSegments(packet.data)) { this.bad++; return; }
+    const key = PgsFeed.key(packet);
+    // A seek re-reads the region it lands in and enableSubtitle() backfills
+    // whatever is already buffered, so the same display set genuinely arrives
+    // more than once. Without this the array -- and every reload built from
+    // it -- grew a duplicate per visit.
+    if (this._keys.has(key)) return;
+    this._keys.add(key);
     this.packets.push({ time: packet.time, data: packet.data });
+    this._schedule();
+  }
+
+  /** Tell the feed where the playhead is, so it can drop what is out of range. */
+  setTime(seconds) {
+    if (!Number.isFinite(seconds)) return;
+    this._time = seconds;
+    if (this._trim()) this._schedule();
+  }
+
+  _trim() {
+    const lo = this._time - this._behind, hi = this._time + this._ahead;
+    const keep = this.packets.filter(p => p.time >= lo && p.time <= hi);
+    if (keep.length === this.packets.length) return false;
+    this.packets = keep;
+    this._keys = new Set(keep.map(PgsFeed.key));
+    return true;
+  }
+
+  _schedule() {
+    this._dirty = true;
     // Packets arrive in bursts of one read chunk; rebuilding per packet would
-    // re-parse the whole stream dozens of times per chunk.
+    // re-parse the whole window dozens of times per chunk.
     if (this._timer) return;
-    this._timer = setTimeout(() => { this._timer = null; this.flush(); }, 100);
+    this._timer = setTimeout(() => { this._timer = null; this.flush(); }, 250);
   }
 
   flush() {
-    if (!this.packets.length) return;
+    if (!this._dirty || !this.packets.length) return;
+    this._dirty = false;
     this.packets.sort((a, b) => a.time - b.time);
+    this.reloads++;
     this.onUpdate(packetsToSup(this.packets));
   }
 
   reset() {
     this.packets = [];
+    this._keys = new Set();
+    this._dirty = false;
     clearTimeout(this._timer);
     this._timer = null;
   }

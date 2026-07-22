@@ -1,220 +1,701 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>webplayer</title>
+<title>LinWeb</title>
 <style>
-  :root { color-scheme: dark; --bg:#0b0d10; --panel:#14181d; --line:#242a31; --fg:#e6e9ec; --dim:#8b949e; --acc:#4a9eff; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
-  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.02em; }
-  main { display:grid; grid-template-columns:1fr 340px; gap:16px; padding:16px; align-items:start; }
-  @media (max-width:900px){ main{grid-template-columns:1fr} }
-  #stage { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; }
-  video { width:100%; height:100%; display:block; background:#000; }
-  /* Both subtitle renderers append their own canvas next to the video. They
-     must not sit below it, resize the layout, or swallow clicks on the
-     controls underneath. */
-  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-  aside { display:flex; flex-direction:column; gap:12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
-  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 8px; font-weight:600; }
-  button, select, input[type=file]::file-selector-button {
-    background:#1d232a; color:var(--fg); border:1px solid var(--line); border-radius:4px;
-    padding:6px 12px; font:inherit; cursor:pointer;
+  :root {
+    color-scheme: dark;
+    --bg:#0a0c0f; --panel:#12161b; --panel-2:#171c22; --line:#232a33;
+    --fg:#e8ecf1; --dim:#8a95a3; --faint:#5c6672;
+    --acc:#4c9aff; --acc-dim:#2b5c99;
+    --ok:#5fd68a; --warn:#f0b429; --err:#ff6b63; --dv:#f5c451;
+    --r:8px;
   }
-  button:hover { border-color:var(--acc); }
-  button:disabled { opacity:.4; cursor:default; }
-  select { width:100%; margin-bottom:6px; }
-  input[type=file] { color:var(--dim); font-size:13px; }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:13px; }
-  .kv dt { color:var(--dim); }
-  .kv dd { margin:0; font-variant-numeric:tabular-nums; }
-  .badge { display:inline-block; padding:1px 7px; border-radius:3px; font-size:11px; font-weight:600; letter-spacing:.03em; }
-  .b-hdr { background:#1a3a2a; color:#5fd68a; } .b-dv { background:#3a2a1a; color:#f0b429; }
-  .b-warn{ background:#3a1a1a; color:#ff7b72; } .b-ok { background:#1a2a3a; color:#6cb6ff; }
-  #log { font:11px/1.45 ui-monospace,Consolas,monospace; max-height:170px; overflow:auto; white-space:pre-wrap; color:var(--dim); }
-  #log .error { color:#ff7b72; } #log .warn { color:#f0b429; }
-  .empty { color:var(--dim); font-size:13px; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.55 ui-sans-serif,system-ui,"Segoe UI",-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button, input, select { font:inherit; color:inherit; }
+
+  /* ---------- header ---------- */
+  header {
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:12px 20px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#12161b,#0f1317);
+  }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:650; letter-spacing:-.01em; }
+  .brand svg { width:19px; height:19px; color:var(--acc); }
+  .brand small { color:var(--faint); font-weight:400; font-size:11px; letter-spacing:.04em; }
+  .spacer { flex:1; }
+
+  .btn {
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:7px 13px; cursor:pointer; transition:.14s; white-space:nowrap;
+  }
+  .btn:hover:not(:disabled) { border-color:var(--acc-dim); background:#1c232b; }
+  .btn:disabled { opacity:.38; cursor:default; }
+  .btn.primary { background:var(--acc); border-color:var(--acc); color:#06121f; font-weight:600; }
+  .btn.primary:hover:not(:disabled) { background:#5ea6ff; border-color:#5ea6ff; }
+  .btn.ghost { background:transparent; color:var(--dim); }
+  .btn.ghost:hover { color:var(--fg); }
+
+  /* ---------- open panel ---------- */
+  .url-wrap { display:flex; flex:1; min-width:260px; }
+  .url-wrap input {
+    flex:1; min-width:0; background:#0c1014; border:1px solid var(--line);
+    border-right:0; border-radius:6px 0 0 6px; padding:7px 11px; outline:none;
+  }
+  .url-wrap input:focus { border-color:var(--acc-dim); }
+  .url-wrap input::placeholder { color:var(--faint); }
+  .url-wrap button { border-radius:0 6px 6px 0; }
+
+  /* ---------- layout ---------- */
+  main { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:18px; padding:18px 20px 28px; align-items:start; }
+  @media (max-width:960px) { main { grid-template-columns:minmax(0,1fr); } }
+
+  #stage {
+    position:relative; background:#000; border-radius:var(--r);
+    overflow:hidden; aspect-ratio:16/9; border:1px solid var(--line);
+  }
+  video { width:100%; height:100%; display:block; background:#000; }
+  /* Both subtitle renderers append a canvas next to the video. It must overlay,
+     not displace, and must not swallow clicks on the controls beneath it. */
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  /* Edge/Chromium composites JASSUB's worker-side OffscreenCanvas (WebGL) as an
+     OPAQUE quad in a normal window: its transparent framebuffer blacks out the
+     whole picture and only the subtitle text is left. Proven by screenshotting
+     the real composite (tools/shot-page.ps1 over public/assdiag.html) -- the
+     <video> keeps decoding live frames the whole time; it is a DirectComposition
+     alpha bug, not the renderer. `screen` forces the canvas to blend with the
+     video instead of standing over it as an opaque quad. Fullscreen takes a
+     different path where the alpha IS honoured, so the blend is dropped there to
+     keep effect subtitles pristine. PGS draws to a main-thread 2D canvas and is
+     unaffected, so this is scoped to .JASSUB. */
+  #stage canvas.JASSUB { mix-blend-mode: screen; }
+  #stage:fullscreen canvas.JASSUB { mix-blend-mode: normal; }
+
+  .placeholder {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; color:var(--faint);
+    text-align:center; padding:24px; pointer-events:none;
+  }
+  .placeholder svg { width:40px; height:40px; opacity:.5; }
+  .placeholder b { color:var(--dim); font-weight:500; }
+  .placeholder span { font-size:12.5px; max-width:36ch; }
+
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 14px; }
+  .card > h2 {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--faint); margin:0 0 10px; font-weight:650;
+  }
+
+  select {
+    width:100%; background:#0c1014; border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; margin-bottom:7px; cursor:pointer;
+  }
+  select:hover { border-color:var(--acc-dim); }
+  select:disabled { opacity:.5; cursor:default; }
+  .field { margin-bottom:9px; }
+  .field:last-child { margin-bottom:0; }
+  .field label { display:block; font-size:11px; color:var(--faint); margin-bottom:4px; letter-spacing:.02em; }
+
+  .kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 12px; font-size:13px; margin:0; }
+  .kv dt { color:var(--faint); }
+  .kv dd { margin:0; font-variant-numeric:tabular-nums; min-width:0; overflow-wrap:anywhere; }
+
+  .badges { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:11px; }
+  .badge { padding:2px 8px; border-radius:4px; font-size:10.5px; font-weight:650; letter-spacing:.03em; }
+  .b-hdr { background:#12351f; color:var(--ok); }
+  .b-dv  { background:#3a2c12; color:var(--dv); }
+  .b-warn{ background:#3a1614; color:var(--err); }
+  .b-ok  { background:#14283c; color:#7ab8ff; }
+
+  .note { margin-top:9px; font-size:12px; line-height:1.5; color:var(--dim); }
+  .empty { color:var(--faint); font-size:12.5px; }
+
+  details.log summary {
+    cursor:pointer; list-style:none; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--faint); font-weight:650; display:flex;
+    align-items:center; justify-content:space-between;
+  }
+  details.log summary::-webkit-details-marker { display:none; }
+  details.log summary::after { content:'▾'; transition:.15s; }
+  details.log[open] summary::after { transform:rotate(180deg); }
+  #log {
+    font:11px/1.5 ui-monospace,Consolas,monospace; max-height:220px; overflow:auto;
+    white-space:pre-wrap; color:var(--dim); margin-top:9px; overflow-wrap:anywhere;
+  }
+  #log .error { color:var(--err); } #log .warn { color:var(--warn); }
+  #log time { color:var(--faint); margin-right:6px; }
+
+  /* ---------- in-frame video controls ----------
+     Proportions follow what Plyr / Video.js / Shaka actually ship: the seek bar
+     gets its own row above the buttons (inline, it is squeezed to a stub and
+     hard to hit), buttons carry a 40px target, and icons are one 24px Lucide
+     set at a single stroke width. The emoji this replaced rendered at a
+     different size and weight on every OS. */
+  .vctl {
+    position:absolute; left:0; right:0; bottom:0; z-index:4;
+    display:flex; flex-direction:column; gap:2px; padding:26px 12px 8px;
+    background:linear-gradient(180deg, transparent, rgba(0,0,0,.78));
+    color:#fff; opacity:1; transition:opacity .25s ease;
+  }
+  #stage.idle .vctl { opacity:0; pointer-events:none; }
+  #stage.idle { cursor:none; }
+
+  .vrow { display:flex; align-items:center; gap:4px; }
+  .vspacer { flex:1; }
+
+  .vbtn {
+    width:40px; height:40px; padding:8px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background:transparent; border:0; border-radius:6px; cursor:pointer;
+    color:#fff; transition:background .15s, opacity .15s;
+  }
+  .vbtn:hover { background:rgba(255,255,255,.13); }
+  .vbtn:active { opacity:.65; }
+  .vbtn svg { width:22px; height:22px; display:block; }
+  .vbtn:focus-visible, .seek:focus-visible, .vol:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+
+  /* seek: full width, its own row */
+  .seek { height:16px; display:flex; align-items:center; cursor:pointer; padding:0 2px; }
+  .seek-rail {
+    position:relative; width:100%; height:5px; border-radius:3px;
+    background:rgba(255,255,255,.26); transition:height .12s ease;
+  }
+  .seek:hover .seek-rail, .seek:focus-visible .seek-rail { height:7px; }
+  .seek-buf, .seek-fill { position:absolute; left:0; top:0; height:100%; border-radius:3px; }
+  .seek-buf  { background:rgba(255,255,255,.28); width:0; }
+  .seek-fill { background:var(--acc); width:0; }
+  .seek-fill::after {
+    content:''; position:absolute; right:-6px; top:50%; transform:translateY(-50%);
+    width:12px; height:12px; border-radius:50%; background:#fff;
+    opacity:0; transition:opacity .12s;
+  }
+  .seek:hover .seek-fill::after, .seek:focus-visible .seek-fill::after { opacity:1; }
+
+  /* volume: slider expands on hover so the resting bar stays uncluttered */
+  .volume { display:flex; align-items:center; }
+  .vol {
+    width:0; opacity:0; height:4px; margin-left:0; accent-color:var(--acc);
+    cursor:pointer; transition:width .18s ease, opacity .18s ease, margin-left .18s ease;
+  }
+  .volume:hover .vol, .vol:focus-visible { width:62px; opacity:1; margin-left:6px; margin-right:6px; }
+
+  .vtime {
+    font:12.5px/1 ui-monospace, Consolas, monospace; font-variant-numeric:tabular-nums;
+    padding:0 8px; white-space:nowrap; opacity:.95;
+  }
+  .vtime i { opacity:.45; font-style:normal; margin:0 2px; }
+
+  /* track menu: a panel above the gear, the way every player does it --
+     three loose <select> floating in the bar never looked like one control set */
+  .menu-wrap { position:relative; }
+  .menu {
+    position:absolute; bottom:calc(100% + 8px); right:0; min-width:230px;
+    background:rgba(20,24,30,.97); border:1px solid rgba(255,255,255,.12);
+    border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,.5);
+    padding:8px; display:flex; flex-direction:column; gap:8px; z-index:10;
+  }
+  .menu[hidden] { display:none; }
+  .menu-row { display:flex; flex-direction:column; gap:4px; }
+  .menu-note { font-size:11px; color:var(--faint); margin-top:-4px; font-variant-numeric:tabular-nums; }
+  .menu-row > span {
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--faint); font-weight:650;
+  }
+  .menu select {
+    width:100%; background:#0c1014; color:var(--fg);
+    border:1px solid var(--line); border-radius:5px; padding:6px 8px; font-size:13px;
+  }
+  .menu select:hover { border-color:var(--acc-dim); }
+  .menu select:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+
+  #stage:fullscreen { border-radius:0; border:0; aspect-ratio:auto; width:100vw; height:100vh; }
+  #stage:fullscreen video { object-fit:contain; }
+
+  /* ---------- control bar under the video ---------- */
+  .picks { display:flex; gap:8px; flex:1; flex-wrap:wrap; min-width:0; }
+  .pick { display:flex; align-items:center; gap:7px; min-width:0; flex:1 1 190px; }
+  .pick > span {
+    font-size:11px; color:var(--faint); letter-spacing:.02em;
+    white-space:nowrap; flex-shrink:0;
+  }
+  .pick select { margin:0; padding:6px 8px; font-size:13px; }
+  .pick.off select { color:var(--faint); }
+
+  /* ---------- drag & drop ---------- */
+  #drop {
+    position:fixed; inset:0; z-index:50; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(10,12,15,.86); backdrop-filter:blur(3px);
+    border:2px dashed var(--acc); font-size:16px; color:var(--acc);
+  }
+  body.dragging #drop { display:flex; }
 </style>
 
 <header>
-  <h1>webplayer</h1>
-  <input type="file" id="file" accept=".mkv,.webm,.mp4">
-  <span class="empty">or</span>
-  <button id="loadHoushi">houshi.mkv (4K DV)</button>
-  <button id="loadAss">ASS 特效</button>
-  <button id="loadPgs">PGS</button>
-  <span class="empty">·</span>
-  <label class="empty" style="font-size:13px">外挂字幕 <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa"></label>
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
+    </svg>
+    LinWeb <small>0.1.0 · MKV · HDR · DV · ASS/PGS</small>
+  </div>
+  <div class="spacer"></div>
+  <div class="url-wrap">
+    <input id="url" type="url" spellcheck="false" placeholder="粘贴视频直链，或把文件拖进来">
+    <button class="btn" id="loadUrl">打开</button>
+  </div>
+  <button class="btn" id="pickFile">本地文件…</button>
+  <button class="btn ghost" id="pickSub">外挂字幕…</button>
+  <input type="file" id="file" accept=".mkv,.webm,.mp4,.m4v" hidden>
+  <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa" hidden>
 </header>
 
 <main>
-  <div id="stage"><video id="video" controls playsinline></video></div>
+  <div>
+    <div id="stage">
+      <video id="video" playsinline></video>
+      <div class="vctl" id="vctl" hidden>
+        <div class="seek" id="seek" role="slider" tabindex="0"
+             aria-label="进度" aria-valuemin="0" aria-valuenow="0">
+          <div class="seek-rail"><div class="seek-buf" id="seekBuf"></div><div class="seek-fill" id="seekFill"></div></div>
+        </div>
+        <div class="vrow">
+          <button class="vbtn" id="ppBtn" aria-label="播放/暂停"><svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></button>
+          <div class="volume">
+            <button class="vbtn" id="muteBtn" aria-label="静音"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg></button>
+            <input type="range" id="vol" class="vol" min="0" max="1" step="0.02" value="1" aria-label="音量">
+          </div>
+          <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
+          <div class="vspacer"></div>
+          <div class="menu-wrap">
+            <button class="vbtn" id="gearBtn" aria-label="轨道设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <div class="menu" id="picks" role="menu" hidden></div>
+          </div>
+          <button class="vbtn" id="fsBtn" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+        </div>
+      </div>
+      <div class="placeholder" id="placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
+        </svg>
+        <b>拖入视频文件，或粘贴一个直链</b>
+        <span>MKV 直接播放，不转码 — HDR、Dolby Vision、特效 ASS 与 PGS 字幕原样保留</span>
+      </div>
+    </div>
+
+
+  </div>
+
   <aside>
     <div class="card">
-      <h2>Source</h2>
-      <div id="meta" class="empty">no file loaded</div>
+      <h2>来源</h2>
+      <div id="meta" class="empty">尚未载入</div>
     </div>
-    <div class="card">
-      <h2>Tracks</h2>
-      <div id="tracks" class="empty">—</div>
-      <button id="playBtn" disabled style="width:100%;margin-top:8px">Play</button>
-    </div>
-    <div class="card">
-      <h2>Log</h2>
+    <details class="card log" id="logCard">
+      <summary>日志</summary>
       <div id="log"></div>
-    </div>
+    </details>
   </aside>
 </main>
+
+<div id="drop">松开以载入</div>
 
 <script type="module">
 import { Player } from '../src/player.js';
 import { Subtitles, attachSrt } from '../src/subs/index.js';
+import { VolumeStage } from '../src/audio/gain.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
 const player = new Player(video);
 const subs = new Subtitles(player, { log: (m, l) => player.log(m, l) });
+// Built once and never rebuilt: createMediaElementSource can be called only
+// once per element, and calling it again throws and takes the audio with it.
+const volume = new VolumeStage(video, { log: (m, l) => player.log(m, l) });
 
 const logEl = $('#log');
 player.log = (msg, level = 'info') => {
   const line = document.createElement('div');
   line.className = level;
-  line.textContent = `${new Date().toLocaleTimeString('en-GB')}  ${msg}`;
+  const t = document.createElement('time');
+  t.textContent = new Date().toLocaleTimeString('en-GB');
+  line.append(t, msg);
   logEl.append(line);
   logEl.scrollTop = logEl.scrollHeight;
+  // Surface problems without making the user go looking for them.
+  if (level === 'error') $('#logCard').open = true;
 };
 
 const fmtBytes = n => n > 1e9 ? `${(n / 2 ** 30).toFixed(2)} GB` : `${(n / 2 ** 20).toFixed(1)} MB`;
 const fmtTime = s => {
+  if (!Number.isFinite(s) || s <= 0) return '未知';
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
-  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+           : `${m}:${String(sec).padStart(2, '0')}`;
 };
 
 let info = null;
 
 async function load(input) {
-  $('#playBtn').disabled = true;
-  $('#meta').textContent = 'reading…';
+  $('#meta').textContent = '读取中…';
   try {
+    await subs.destroy();
+    // Loudness is a property of the film, so the measurement cannot carry over.
+    volume.restart();
     const t0 = performance.now();
     info = await player.load(input);
-    player.log(`parsed header in ${(performance.now() - t0).toFixed(0)}ms`);
+    player.log(`解析头部用时 ${(performance.now() - t0).toFixed(0)}ms`);
     render();
   } catch (e) {
-    $('#meta').innerHTML = `<span class="badge b-warn">error</span> ${e.message}`;
+    info = null;
+    $('#meta').innerHTML = `<span class="badge b-warn">失败</span> <div class="note">${explain(e, input)}</div>`;
     player.log(e.message, 'error');
     console.error(e);
   }
 }
 
+/**
+ * A failed remote load is almost always one of two server-side things, and
+ * "Failed to fetch" tells the user neither of them. Seeking needs Range, and a
+ * cross-origin file needs CORS; both are the server's to fix, not the page's.
+ */
+function explain(e, input) {
+  const remote = typeof input === 'string';
+  if (!remote) return e.message;
+  if (/does not support Range/i.test(e.message)) {
+    return `${e.message}。播放器靠 Range 请求做 seek 与分段读取，服务器必须返回 <code>Accept-Ranges: bytes</code>。`;
+  }
+  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) {
+    return `无法读取该地址。跨域文件需要服务器返回 <code>Access-Control-Allow-Origin</code>，`
+         + `并在 <code>Access-Control-Expose-Headers</code> 里放行 <code>Accept-Ranges, Content-Length, Content-Range</code>。`;
+  }
+  return e.message;
+}
+
 function render() {
+  $('#placeholder').style.display = 'none';
+
   const badges = [];
   if (info.hdr) badges.push(`<span class="badge b-hdr">HDR ${info.hdr.transfer}</span>`);
   if (info.dynamicHdr) badges.push(`<span class="badge b-hdr">${info.hdr10plus ? 'HDR10+' : 'HDR Vivid'}</span>`);
   if (info.dolbyVision) {
     badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
   }
+  if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
+
   $('#meta').innerHTML = `
-    <div style="margin-bottom:8px">${badges.join(' ') || '<span class="badge b-ok">SDR</span>'}</div>
+    <div class="badges">${badges.join('')}</div>
     <dl class="kv">
-      <dt>file</dt><dd style="word-break:break-all">${info.name}</dd>
-      <dt>size</dt><dd>${fmtBytes(info.size)}</dd>
-      <dt>duration</dt><dd>${fmtTime(info.duration)}</dd>
-      ${info.hdr ? `<dt>colour</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
-      ${info.mastering ? `<dt>mastered</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits peak</dd>` : ''}
-      ${info.cll ? `<dt>light level</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
-      <dt>fonts</dt><dd>${info.fonts} embedded</dd>
+      <dt>文件</dt><dd>${info.name}</dd>
+      <dt>大小</dt><dd>${fmtBytes(info.size)}</dd>
+      <dt>时长</dt><dd>${fmtTime(info.duration)}</dd>
+      ${info.hdr ? `<dt>色彩</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
+      ${info.mastering ? `<dt>母版</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits 峰值</dd>` : ''}
+      ${info.cll ? `<dt>亮度</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
+      ${info.fonts ? `<dt>字体</dt><dd>${info.fonts} 个内嵌</dd>` : ''}
     </dl>
-    ${info.dynamicHdr ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
-    ${info.dolbyVision ? `<div style="margin-top:8px;font-size:12px;color:var(--dim)">${info.dolbyVision.note}</div>` : ''}`;
+    ${info.dynamicHdr ? `<div class="note">${info.dynamicHdr.format} — ${info.dynamicHdr.note}</div>` : ''}
+    ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
 
-  const sel = (id, items, fmt) => items.length
-    ? `<select id="${id}">${items.map((x, i) => `<option value="${i}">${fmt(x)}</option>`).join('')}</select>`
-    : `<div class="empty" style="margin-bottom:6px">no ${id} track</div>`;
+  // Every track type is shown even when there is only one option: which audio
+  // track is playing is information, not just a control, and hiding it was the
+  // wrong call -- a viewer wants to see that a file is 5.1 E-AC3 whether or not
+  // there is a second track to switch to.
+  const field = (label, id, items, fmt, extraFirst) => items.length || extraFirst
+    ? `<div class="menu-row"><span>${label}</span><select id="${id}" aria-label="${label}">${
+        (extraFirst ?? '') + items.map((x, i) => fmt(x, i)).join('')}</select></div>`
+    : '';
 
-  $('#tracks').innerHTML =
-    sel('videoSel', info.video, x => `${x.label}${x.supported ? '' : '  ✕ unsupported'}`) +
-    sel('audioSel', info.audio, x => `${x.label}${x.supported ? '' : `  ✕ ${x.note.name} — needs a decoder`}`) +
-    (info.subtitles.length
-      ? `<select id="subSel"><option value="-1">subtitles: off</option>${
-          info.subtitles.map((x, i) => {
-            const ok = Subtitles.SUPPORTED.has(x.format);
-            return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : '  ✕ no renderer'}</option>`;
-          }).join('')}</select>`
-      : '<div class="empty">no subtitle track</div>');
+  $('#picks').innerHTML =
+    field('视频', 'videoSel', info.video,
+      (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
+    field('音频', 'audioSel', info.audio,
+      (x, i) => `<option value="${i}">${x.label}${x.supported ? '' : ` — ${x.note.name}，软解`}</option>`) +
+    field('字幕', 'subSel', info.subtitles,
+      (x, i) => {
+        const ok = Subtitles.SUPPORTED.has(x.format);
+        return `<option value="${i}"${ok ? '' : ' disabled'}>${x.label}${ok ? '' : ' ✕ 无渲染器'}</option>`;
+      }, '<option value="-1">关闭</option>')
+    // Cinema mixes sit ~10 dB below what a web page normally sounds like, and
+    // video.volume stops at 1.0. This is where that gets made up -- but only on
+    // request: routing through WebAudio drifts the audio clock, so the default
+    // is native playback and the viewer opts in when a film is too quiet.
+    + (volume.ok ? `<div class="menu-row"><span>响度</span><select id="gainSel" aria-label="响度">
+         <option value="1">原始音量</option><option value="auto">自动增益</option>
+         <option value="1.5">+3.5 dB</option><option value="2">+6 dB</option><option value="3">+9.5 dB</option>
+       </select></div><div class="menu-note" id="gainNote"></div>` : '');
 
-  $('#subSel')?.addEventListener('change', async e => {
-    const idx = Number(e.target.value);
-    e.target.disabled = true;
-    try { await subs.select(idx); }
-    catch (err) { player.log(`subtitles: ${err.message}`, 'error'); console.error(err); }
-    finally { e.target.disabled = false; }
+  $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
+  $('#gainSel')?.addEventListener('change', e => {
+    const v = e.target.value;
+    if (v === 'auto') { volume.setAuto(true); volume.boost = 1; }
+    else { volume.setAuto(false); volume.boost = Number(v); }
+    paintGain();
   });
+  paintGain();
 
   for (const a of info.audio) {
     if (a.supported) continue;
-    // Say what it is and what it would take, not just "unsupported".
-    player.log(`${a.note.name} cannot play: ${a.note.reason} ${a.note.route}`, 'warn');
+    player.log(`${a.note.name}: ${a.note.reason} ${a.note.route}`, 'warn');
     if (a.note.downmix) player.log(a.note.downmix, 'warn');
   }
-  $('#playBtn').disabled = !info.video.some(v => v.supported);
+  // Nothing outside the frame to press: loading a file starts it.
+  if (info.video.some(v => v.supported)) start();
+  else player.log('没有可播放的视频轨', 'error');
 }
 
-$('#playBtn').addEventListener('click', async () => {
-  $('#playBtn').disabled = true;
+/** Show what the gain stage decided, so a boost is never silently applied. */
+function paintGain() {
+  const el = $('#gainNote');
+  if (!el || !volume.ok) return;
+  if (!volume.engaged) { el.textContent = '原始音量（未增益）'; return; }
+  const m = volume.measuredDbfs;
+  el.textContent = m == null
+    ? '测量中…'
+    : `节目 ${m.toFixed(1)} dBFS · 已提升 ${volume.appliedDb.toFixed(1)} dB`;
+}
+setInterval(paintGain, 1000);
+
+/**
+ * Turn a subtitle track on. Shared by the dropdown and by play(), so the two
+ * can never drift apart -- and so a failure is reported instead of leaving the
+ * dropdown pointing at a track that is not being drawn.
+ */
+async function applySubtitle(idx) {
+  const sel = $('#subSel');
+  if (sel) { sel.disabled = true; sel.value = String(idx); }
   try {
-    // A new play() rebuilds the MediaSource and restarts reading, so any
-    // renderer from the previous run is holding events for a timeline that no
-    // longer exists.
+    const started = await subs.select(idx);
+    if (idx >= 0 && !started) {
+      player.log('该字幕格式没有渲染器，未开启', 'warn');
+      if (sel) sel.value = '-1';
+    } else if (idx >= 0) {
+      player.log(`字幕已开启: ${info.subtitles[idx].label}`);
+    }
+  } catch (err) {
+    player.log(`字幕开启失败: ${err.message}`, 'error');
+    console.error(err);
+    if (sel) sel.value = '-1';
+  } finally {
+    if (sel) sel.disabled = false;
+  }
+}
+
+async function start() {
+  try {
+    // A new play() rebuilds the MediaSource, so a renderer from the previous
+    // run holds events for a timeline that is gone. The CHOICE survives.
+    const wanted = Number($('#subSel')?.value ?? -1);
     await subs.destroy();
-    if ($('#subSel')) $('#subSel').value = '-1';
     await player.play({
       videoIndex: Number($('#videoSel')?.value ?? 0),
       audioIndex: Number($('#audioSel')?.value ?? 0),
     });
-    await video.play().catch(e => player.log(`autoplay blocked: ${e.message}`, 'warn'));
+    // An AudioContext created before any gesture starts suspended, and a
+    // suspended context means silence rather than an error.
+    await volume.resume().catch(() => {});
+    await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
+    if (wanted >= 0) await applySubtitle(wanted);
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);
-  } finally {
-    $('#playBtn').disabled = false;
   }
-});
+}
 
+// Changing the video or audio track has to restart the MediaSource; there is
+// no apply button to press, so the change itself is the instruction.
+for (const id of ['#videoSel', '#audioSel']) {
+  document.addEventListener('change', e => { if (e.target.matches(id)) start(); });
+}
+
+// ---- opening things ------------------------------------------------------
+$('#pickFile').addEventListener('click', () => $('#file').click());
+$('#pickSub').addEventListener('click', () => $('#extSub').click());
 $('#file').addEventListener('change', e => { if (e.target.files[0]) load(e.target.files[0]); });
 
-// External subtitle file. SRT and VTT go to the browser's own text track
-// renderer; there is nothing to gain from drawing those ourselves.
+const openUrl = () => {
+  const u = $('#url').value.trim();
+  if (u) load(u);
+};
+$('#loadUrl').addEventListener('click', openUrl);
+$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') openUrl(); });
+
+// Drag and drop anywhere on the page.
+let dragDepth = 0;
+addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  // Subtitles and video arrive the same way; tell them apart by extension
+  // rather than making the user aim at the right drop target.
+  if (/\.(srt|vtt|ass|ssa)$/i.test(f.name)) loadSubtitleFile(f);
+  else load(f);
+});
+
+// External subtitles. SRT and VTT go to the browser's own text track renderer;
+// there is nothing to gain from drawing those ourselves.
 let extTrack = null;
-$('#extSub').addEventListener('change', async e => {
-  const file = e.target.files[0];
-  if (!file) return;
+async function loadSubtitleFile(file) {
   extTrack?.remove();
   extTrack = null;
   try {
-    const text = await file.text();
     if (/\.(ass|ssa)$/i.test(file.name)) {
-      // Not wired up: an external ASS script needs its fonts from the system
-      // rather than the MKV, which is a different problem from the embedded
-      // case and is not solved by pretending it loaded.
-      player.log('external ASS is not supported yet — only embedded ASS tracks', 'warn');
+      // Not wired up: an external ASS script has to find its fonts on the
+      // system rather than in the MKV, which is a different problem and is not
+      // solved by pretending the file loaded.
+      player.log('外挂 ASS 暂不支持 — 只支持 MKV 内嵌 ASS 轨（内嵌字体是关键）', 'warn');
       return;
     }
-    extTrack = attachSrt(video, text, { label: file.name, language: 'und' });
-    player.log(`external subtitles: ${file.name} (${extTrack.track.cues?.length ?? '…'} cues)`);
+    extTrack = attachSrt(video, await file.text(), { label: file.name, language: 'und' });
+    player.log(`外挂字幕: ${file.name}（${extTrack.track.cues?.length ?? '…'} 条）`);
   } catch (err) {
-    player.log(`external subtitles: ${err.message}`, 'error');
+    player.log(`外挂字幕: ${err.message}`, 'error');
+  }
+}
+$('#extSub').addEventListener('change', e => { if (e.target.files[0]) loadSubtitleFile(e.target.files[0]); });
+
+
+// ---- in-frame video controls -------------------------------------------
+// Written out because the native ones are gone. Fullscreen and keyboard are
+// the two things a viewer notices the moment they are missing; the rest of
+// what <video controls> offered (cast, PiP) is not wanted here.
+const stage = $('#stage'), vctl = $('#vctl'), seek = $('#seek');
+const clock = s => {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+           : `${m}:${String(sec).padStart(2, '0')}`;
+};
+
+function paintProgress() {
+  const d = video.duration;
+  if (!Number.isFinite(d) || d <= 0) return;
+  $('#seekFill').style.width = `${(video.currentTime / d) * 100}%`;
+  // Buffered is worth drawing: on a 20 GB file over Range requests, knowing
+  // how far ahead it is safe to drag is the difference between a smooth seek
+  // and a stall.
+  const b = video.buffered;
+  let end = 0;
+  for (let i = 0; i < b.length; i++) {
+    if (video.currentTime >= b.start(i) - 0.5 && video.currentTime <= b.end(i)) end = b.end(i);
+  }
+  $('#seekBuf').style.width = `${Math.min(100, (end / d) * 100)}%`;
+  $('#tNow').textContent = clock(video.currentTime);
+  $('#tEnd').textContent = clock(d);
+  seek.setAttribute('aria-valuenow', String(Math.round(video.currentTime)));
+  seek.setAttribute('aria-valuemax', String(Math.round(d)));
+  seek.setAttribute('aria-valuetext', `${clock(video.currentTime)} / ${clock(d)}`);
+}
+
+const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
+$('#ppBtn').addEventListener('click', togglePlay);
+video.addEventListener('click', togglePlay);
+const ICON_PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 14 9-14 9z"/></svg>`, ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+const ICON_VOL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg>`, ICON_MUTE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`;
+const ICON_FULL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`, ICON_EXIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`;
+video.addEventListener('play', () => { $('#ppBtn').innerHTML = ICON_PAUSE; });
+video.addEventListener('pause', () => { $('#ppBtn').innerHTML = ICON_PLAY; });
+video.addEventListener('timeupdate', paintProgress);
+video.addEventListener('progress', paintProgress);
+video.addEventListener('loadedmetadata', () => { vctl.hidden = false; paintProgress(); });
+
+const seekToClientX = x => {
+  const r = seek.getBoundingClientRect();
+  const d = video.duration;
+  if (Number.isFinite(d) && d > 0) video.currentTime = Math.max(0, Math.min(d, ((x - r.left) / r.width) * d));
+};
+let scrubbing = false;
+seek.addEventListener('pointerdown', e => { scrubbing = true; seek.setPointerCapture(e.pointerId); seekToClientX(e.clientX); });
+seek.addEventListener('pointermove', e => { if (scrubbing) seekToClientX(e.clientX); });
+seek.addEventListener('pointerup', e => { scrubbing = false; seek.releasePointerCapture(e.pointerId); });
+
+$('#muteBtn').addEventListener('click', () => { video.muted = !video.muted; syncVolume(); });
+$('#vol').addEventListener('input', e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; syncVolume(); });
+function syncVolume() {
+  $('#muteBtn').innerHTML = video.muted || video.volume === 0 ? ICON_MUTE : ICON_VOL;
+  $('#vol').value = String(video.muted ? 0 : video.volume);
+}
+video.addEventListener('volumechange', syncVolume);
+
+const menu = $('#picks'), gear = $('#gearBtn');
+gear.addEventListener('click', e => {
+  e.stopPropagation();
+  const open = menu.hidden;
+  menu.hidden = !open;
+  gear.setAttribute('aria-expanded', String(open));
+  if (open) wake();
+});
+// Any click elsewhere, or Escape, closes it -- a panel that only closes by
+// hitting the same button again is the kind of thing people report as stuck.
+document.addEventListener('click', e => {
+  if (!menu.hidden && !menu.contains(e.target) && e.target !== gear) {
+    menu.hidden = true; gear.setAttribute('aria-expanded', 'false');
   }
 });
-$('#loadHoushi').addEventListener('click', () => load('/houshi.mkv'));
-$('#loadAss').addEventListener('click', () => load('/mozahngtantexiaoass.mkv'));
-$('#loadPgs').addEventListener('click', () => load('/qinyinshaonvpgs.mkv'));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !menu.hidden) { menu.hidden = true; gear.setAttribute('aria-expanded', 'false'); }
+});
+// The bar must not fade out from under an open menu.
+const menuOpen = () => !menu.hidden;
+
+document.addEventListener('fullscreenchange', () => {
+  $('#fsBtn').innerHTML = document.fullscreenElement ? ICON_EXIT : ICON_FULL;
+});
+
+$('#fsBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen().catch(e => player.log(`全屏失败: ${e.message}`, 'warn'));
+});
+
+// Hide the controls while playing and the pointer is still.
+let idleTimer = null;
+const wake = () => {
+  stage.classList.remove('idle');
+  clearTimeout(idleTimer);
+  // 3s matches what Shaka and Video.js settle on; long enough to read the time.
+  if (!video.paused && !menuOpen()) idleTimer = setTimeout(() => stage.classList.add('idle'), 3000);
+};
+stage.addEventListener('pointermove', wake);
+stage.addEventListener('pointerleave', () => { if (!video.paused && !menuOpen()) stage.classList.add('idle'); });
+video.addEventListener('pause', wake);
+video.addEventListener('play', wake);
+
+// Keyboard. Ignored while typing in the URL box, which is the one place on
+// this page where space and arrows mean something else.
+addEventListener('keydown', e => {
+  const t = e.target;
+  if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
+  const d = video.duration;
+  switch (e.key) {
+    case ' ': case 'k': e.preventDefault(); togglePlay(); break;
+    case 'ArrowRight': e.preventDefault(); if (Number.isFinite(d)) video.currentTime = Math.min(d, video.currentTime + 5); break;
+    case 'ArrowLeft': e.preventDefault(); video.currentTime = Math.max(0, video.currentTime - 5); break;
+    case 'ArrowUp': e.preventDefault(); video.volume = Math.min(1, video.volume + 0.05); break;
+    case 'ArrowDown': e.preventDefault(); video.volume = Math.max(0, video.volume - 0.05); break;
+    case 'm': video.muted = !video.muted; break;
+    case 'f': $('#fsBtn').click(); break;
+    default: return;
+  }
+  wake();
+});
+syncVolume();
 
 video.addEventListener('error', () => {
   const e = video.error;
-  if (e) player.log(`<video> error ${e.code}: ${e.message || '(no message)'}`, 'error');
+  if (e) player.log(`<video> 错误 ${e.code}: ${e.message || '(无信息)'}`, 'error');
 });
 window.player = player;
+window.subs = subs;
+window.volume = volume;
 </script>

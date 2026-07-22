@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gaindiag</title>
+<style>body{background:#111;color:#ddd;font:12px/1.5 Consolas,monospace;margin:0;padding:12px}
+pre{white-space:pre-wrap}iframe{width:1000px;height:600px;border:1px solid #333}</style>
+<pre id="out"></pre>
+<script type="module">
+// Does the loudness fix actually make the quiet film match the loud one?
+//
+// ffmpeg says the two test files are 7.7 LU apart (-25.9 vs -18.2 LUFS), which
+// is why one of them needs the system volume at maximum. The claim being tested
+// is that after the gain stage they land within a few dB of each other.
+//
+// It also answers a design question I could not answer from the spec: is the
+// analyser tap before or after HTMLMediaElement.volume? If it is after, then
+// turning the volume DOWN would make the automatic gain crank UP, and the two
+// would fight each other.
+const out = document.getElementById('out');
+const say = s => { out.textContent += s + '\n'; };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, ms, what) {
+  const end = performance.now() + ms;
+  while (performance.now() < end) { if (fn()) return true; await wait(150); }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+async function run(url) {
+  const frame = document.createElement('iframe');
+  const loaded = new Promise(res => { frame.onload = res; });
+  document.body.append(frame);
+  frame.src = '/';
+  await loaded;
+  const w = frame.contentWindow;
+  await waitFor(() => w.player && frame.contentDocument.getElementById('url'), 20000, 'boot');
+  const d = frame.contentDocument;
+  d.getElementById('url').value = url;
+  d.getElementById('loadUrl').click();
+  const v = d.getElementById('video');
+  await waitFor(() => !v.paused && v.currentTime > 0.5, 90000, 'playback');
+  // Audible, because the measurement is of the real signal path.
+  v.muted = false; v.volume = 1;
+  const vol = w.volume;
+  if (!vol?.ok) { say(`  ${url}: NO GAIN STAGE`); frame.remove(); return null; }
+  await waitFor(() => vol.measuredDbfs != null, 90000, 'a loudness measurement');
+  await wait(20000);   // let it settle on a stable number
+
+  const measured = vol.measuredDbfs, applied = vol.appliedDb;
+  say(`  ${url}`);
+  say(`    programme ${measured.toFixed(1)} dBFS -> makeup ${applied.toFixed(1)} dB`
+    + ` -> output ${(measured + applied).toFixed(1)} dBFS`);
+
+  // The feedback-loop question, answered by experiment.
+  const before = vol.measuredDbfs;
+  v.volume = 0.25;
+  await wait(6000);
+  const withLowVolume = vol.measuredDbfs;
+  v.volume = 1;
+  say(`    measured at volume 1.00 = ${before.toFixed(1)} dBFS,`
+    + ` after volume 0.25 = ${withLowVolume.toFixed(1)} dBFS`
+    + ` -> tap is ${Math.abs(withLowVolume - before) > 2 ? 'AFTER element volume (FEEDBACK RISK)' : 'BEFORE element volume (safe)'}`);
+
+  frame.remove();
+  return { measured, applied, output: measured + applied };
+}
+
+try {
+  say('=== loudness after the gain stage ===');
+  const quiet = await run('/houshi.mkv');              // -25.9 LUFS by ffmpeg
+  const loud  = await run('/mozahngtantexiaoass.mkv'); // -18.2 LUFS by ffmpeg
+  if (quiet && loud) {
+    const gap = Math.abs(quiet.output - loud.output);
+    say(`\n  output gap between the two films: ${gap.toFixed(1)} dB`);
+    say(`  (ffmpeg measured the SOURCES 7.7 LU apart)`);
+    say(`  VERDICT: ${gap < 4 ? 'MATCHED' : 'STILL MISMATCHED'}`);
+  }
+  say('\nDIAG DONE');
+} catch (e) {
+  say(`\nDIAG FAILED: ${e.message}\n${e.stack}`);
+  say('DIAG DONE');
+}
+fetch('/collect', { method: 'POST', body: out.textContent }).catch(() => {});
+document.title = 'DONE';
+</script>

@@ -1,0 +1,183 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ASS windowed diagnostic</title>
+<!-- Reproduces the user's report: WINDOWED (not fullscreen), turning on the
+     effect-ASS track leaves only the subtitles, no picture. Fullscreen is fine.
+     So this pins the player small and inspects what the JASSUB overlay does to
+     the video: is the video still decoding (canvas is occluding a live frame),
+     or has it stopped compositing (a black frame under live subtitles)? -->
+<style>
+  body { margin:0; background:#111; color:#ddd; font:12px ui-monospace,Consolas,monospace; }
+  #pane { display:grid; grid-template-columns:920px 1fr; gap:10px; height:100vh; }
+  /* The player is kept SMALL and on-screen: the whole point is the windowed,
+     non-fullscreen layout, and an off-screen iframe stops compositing on its
+     own (a harness artifact that already bit us once). */
+  #frame { width:900px; height:520px; border:0; background:#000; }
+  #log { overflow:auto; white-space:pre-wrap; padding:8px; }
+  .ok{color:#5fd68a} .bad{color:#ff6b63} .hi{color:#f0b429}
+</style>
+<div id="pane">
+  <div><iframe id="frame" src="/public/index.html"></iframe></div>
+  <div id="log"></div>
+</div>
+<script type="module">
+const out = document.getElementById('log');
+const post = () => fetch('/collect', { method:'POST', body: out.textContent }).catch(()=>{});
+const say = (m, c='') => { const d=document.createElement('div'); if(c)d.className=c; d.textContent=m; out.append(d); out.scrollTop=out.scrollHeight; post(); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FILE = 'http://localhost:8080/' + (new URLSearchParams(location.search).get('file') || 'mozahngtantexiaoass.mkv');
+
+async function wait(cond, ms, step=200) {
+  const end = performance.now()+ms;
+  while (performance.now()<end) { try { if (await cond()) return true; } catch {} await sleep(step); }
+  return false;
+}
+
+const frame = document.getElementById('frame');
+
+async function run() {
+  say('ASS windowed diagnostic — reproducing "只剩字幕/看不见画面" (not fullscreen)');
+  // The player redirects / -> /public/; wait for the loaded document AND its
+  // exposed globals before touching anything (a stale contentDocument was a
+  // real bug in the other harnesses).
+  await wait(() => frame.contentWindow?.player && frame.contentDocument?.getElementById('url'), 15000);
+  const w = frame.contentWindow, d = frame.contentDocument;
+  if (!w?.player) { say('player global never appeared', 'bad'); return say('DIAG DONE'); }
+
+  say('loading ' + FILE);
+  d.getElementById('url').value = FILE;
+  d.getElementById('loadUrl').click();
+
+  const info = await wait(() => w.player.info, 60000);
+  if (!info) { say('file never parsed (info null)', 'bad'); return say('DIAG DONE'); }
+  const I = w.player.info;
+  say(`parsed: ${I.name}  ${I.video?.length} video / ${I.audio?.length} audio / ${I.subtitles?.length} sub tracks`);
+  say(`HDR: ${I.hdr ? (I.hdr.transfer+' '+I.hdr.primaries+' '+I.hdr.bitDepth+'-bit') : 'no (SDR)'} · DV: ${I.dolbyVision?('P'+I.dolbyVision.profile):'no'}`, I.hdr?'hi':'');
+
+  const video = d.getElementById('video');
+  await wait(() => video.videoWidth > 0, 30000);
+  say(`video intrinsic: ${video.videoWidth}x${video.videoHeight}`);
+
+  // Get playback going and land on a spot that has a subtitle on screen.
+  try { await video.play(); } catch {}
+  await sleep(500);
+  const T = Number(new URLSearchParams(location.search).get('t')) || 90;
+  video.currentTime = T;                   // seek to a spot with dialogue+effects
+  await wait(() => video.readyState >= 2 && Math.abs(video.currentTime-T) < 5, 20000);
+  try { await video.play(); } catch {}
+
+  // ?sub=off is the baseline: same file, same seek, NO overlay -- so a
+  // screenshot pair isolates whether turning the JASSUB canvas on blacks out
+  // the picture. Files with no ASS track (houshi) exercise the no-subtitle
+  // playback path, which is what regression 1 is about.
+  const enable = new URLSearchParams(location.search).get('sub') !== 'off';
+  const idx = I.subtitles.findIndex(s => s.format==='ass' || s.format==='ssa');
+  if (enable && idx < 0) say('no ASS/SSA track in this file — measuring plain playback', 'hi');
+  else if (enable) { say(`enabling ASS track [${idx}]: ${I.subtitles[idx].label}`); await w.subs.select(idx).catch(e => say('select threw: '+e.message, 'bad')); }
+  else say(`ASS track LEFT OFF (baseline)`, 'hi');
+  const overlayOn = enable && idx >= 0;
+
+  // Candidate compositing fixes, applied AFTER the overlay is on. The screenshot
+  // says which one brings the picture back.
+  const fix = new URLSearchParams(location.search).get('fix');
+  const stage = d.getElementById('stage');
+  if (fix === 'videoZ')  { video.style.transform = 'translateZ(0)'; say('FIX applied: video transform:translateZ(0)', 'hi'); }
+  if (fix === 'videoWC') { video.style.willChange = 'transform';    say('FIX applied: video will-change:transform', 'hi'); }
+  if (fix === 'stageZ')  { stage.style.transform = 'translateZ(0)'; say('FIX applied: #stage transform:translateZ(0)', 'hi'); }
+  if (fix === 'isolate') { stage.style.isolation = 'isolate';       say('FIX applied: #stage isolation:isolate', 'hi'); }
+  // opacity < 1 disqualifies the hardware overlay (an overlay must be opaque),
+  // forcing the video to composite as a blended texture the canvas sits on.
+  if (fix === 'videoOp') { video.style.opacity = '0.999';           say('FIX applied: video opacity:0.999', 'hi'); }
+  // Disambiguation: hide ONLY the overlay canvas. If the picture returns, the
+  // canvas is compositing opaque over a live video (not an overlay hole-punch).
+  if (fix === 'canvasOff') { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.opacity = '0'; say('FIX applied: canvas opacity:0 (occlusion test)', 'hi'); }
+  // Force the canvas onto Edge's alpha-aware blended-composite path so its
+  // transparent framebuffer stops compositing as an opaque quad.
+  if (fix === 'canvasOp') { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.opacity = '0.999'; say('FIX applied: canvas opacity:0.999', 'hi'); }
+  if (fix === 'canvasZ')  { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.transform = 'translateZ(0)'; say('FIX applied: canvas translateZ(0)', 'hi'); }
+  // mix-blend-mode forces the canvas to blend with its backdrop in the same
+  // compositing pass instead of standing as an isolated opaque DC quad.
+  if (fix === 'mixScreen')  { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'screen';  say('FIX applied: canvas mix-blend-mode:screen', 'hi'); }
+  if (fix === 'mixLighten') { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'lighten'; say('FIX applied: canvas mix-blend-mode:lighten', 'hi'); }
+  if (fix === 'mixPlus')    { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'plus-lighter'; say('FIX applied: canvas mix-blend-mode:plus-lighter', 'hi'); }
+
+  // Let JASSUB boot, size its canvas, and push a few events.
+  const canvas = overlayOn ? await (async () => {
+    await wait(() => d.querySelector('canvas.JASSUB'), 30000);
+    return d.querySelector('canvas.JASSUB');
+  })() : null;
+  await sleep(3000);
+  try { await video.play(); } catch {}
+  await sleep(2000);
+
+  // ---- measurements -------------------------------------------------------
+  say('');
+  say('=== VIDEO ===', 'hi');
+  const vr = video.getBoundingClientRect();
+  const vcs = w.getComputedStyle(video);
+  say(`rect: ${vr.width|0}x${vr.height|0} @ (${vr.left|0},${vr.top|0})`);
+  say(`computed: object-fit=${vcs.objectFit} opacity=${vcs.opacity} visibility=${vcs.visibility} display=${vcs.display} mix-blend=${vcs.mixBlendMode}`);
+
+  // Is the video actually decoding? Frame counter over 1s.
+  // Wait for genuinely steady playback -- on a large file a seek triggers a
+  // re-buffer, and measuring during it reads a false stall.
+  await wait(async () => {
+    if (video.readyState < 4 || video.paused) { try { await video.play(); } catch {} return false; }
+    const a = video.getVideoPlaybackQuality().totalVideoFrames; await sleep(500);
+    return video.getVideoPlaybackQuality().totalVideoFrames > a;   // actually advancing
+  }, 12000, 500);
+  const q0 = video.getVideoPlaybackQuality?.().totalVideoFrames ?? -1;
+  const d0 = video.getVideoPlaybackQuality?.().droppedVideoFrames ?? 0;
+  await sleep(3000);
+  const q1 = video.getVideoPlaybackQuality?.().totalVideoFrames ?? -1;
+  const d1 = video.getVideoPlaybackQuality?.().droppedVideoFrames ?? 0;
+  say(`decoded frames in 3s: ${q1 - q0}  dropped: ${d1 - d0}  paused=${video.paused} readyState=${video.readyState}`, (q1-q0)>30?'ok':'bad');
+
+  // Regression 1: WebAudio must NOT be routing by default -- that permanent
+  // createMediaElementSource fork off the playout clock is what stuttered
+  // no-subtitle playback. `engaged` false == native audio == no drift.
+  say(`VolumeStage: ok=${w.volume.ok} engaged=${w.volume.engaged} (engaged must be FALSE by default)`, w.volume.engaged ? 'bad' : 'ok');
+
+  // What does a 2D readback of the video look like? On an HDR source this is
+  // tone-mapped, but a live SDR-ish luma still tells us the frame is not black.
+  try {
+    const s = document.createElement('canvas'); s.width=160; s.height=90;
+    const cx = s.getContext('2d', { willReadFrequently:true });
+    cx.drawImage(video, 0,0,160,90);
+    const px = cx.getImageData(0,0,160,90).data;
+    let sum=0, lit=0; for (let i=0;i<px.length;i+=4){ const y=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]; sum+=y; if(y>16)lit++; }
+    say(`video readback: meanY=${(sum/(px.length/4)).toFixed(1)} lit%=${(100*lit/(px.length/4)).toFixed(0)}  (drawImage of the <video> itself)`);
+  } catch(e){ say('video readback failed (tainted/HDR): '+e.message, 'hi'); }
+
+  say('');
+  say('=== JASSUB CANVAS ===', 'hi');
+  if (!canvas) { say('no canvas.JASSUB found!', 'bad'); }
+  else {
+    const cr = canvas.getBoundingClientRect();
+    const ccs = w.getComputedStyle(canvas);
+    say(`rect: ${cr.width|0}x${cr.height|0} @ (${cr.left|0},${cr.top|0})`);
+    say(`buffer: ${canvas.width}x${canvas.height}`);
+    say(`inline style: ${canvas.getAttribute('style')}`);
+    say(`computed: position=${ccs.position} top=${ccs.top} left=${ccs.left} width=${ccs.width} height=${ccs.height}`);
+    say(`computed: z-index=${ccs.zIndex} opacity=${ccs.opacity} visibility=${ccs.visibility} display=${ccs.display} mix-blend=${ccs.mixBlendMode} background=${ccs.backgroundColor}`);
+    // Does the canvas exactly cover the video?
+    const covers = cr.left<=vr.left+2 && cr.top<=vr.top+2 && cr.right>=vr.right-2 && cr.bottom>=vr.bottom-2;
+    say(`canvas covers the video box: ${covers}`, covers?'':'hi');
+    // Is the canvas a sibling right after the video, inside #stage?
+    say(`DOM: canvas.parent=#${canvas.parentElement?.id} previousSibling=${canvas.previousElementSibling?.tagName}#${canvas.previousElementSibling?.id}`);
+  }
+
+  say('');
+  say('=== STACKING (elementFromPoint at video centre) ===', 'hi');
+  const cxp = vr.left + vr.width/2, cyp = vr.top + vr.height/2;
+  const top = d.elementFromPoint(cxp, cyp);
+  say(`topmost at centre: ${top?.tagName}.${top?.className||''}#${top?.id||''}`);
+
+  say('');
+  say('interpretation:', 'hi');
+  say('• frames>0 + canvas covers  => video is LIVE but the overlay hides it (compositing/opacity/HDR-overlay)');
+  say('• frames=0                  => video stopped decoding/compositing under the subtitle load');
+  say('DIAG DONE');
+}
+run().catch(e => { say('diagnostic crashed: '+(e?.stack||e), 'bad'); say('DIAG DONE'); });
+</script>
