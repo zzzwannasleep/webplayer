@@ -28,7 +28,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm test          # do not ship a broken build
+      # npm test is NOT run here: the suites read the real .mkv test media
+      # (gitignored copyrighted films) which the runner does not have. Tests are
+      # a local dev tool; CI builds and deploys.
       - run: npm run build     # build-vendor (wasm) + build-site -> dist/
       - uses: actions/upload-pages-artifact@v3
         with:
