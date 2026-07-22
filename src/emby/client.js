@@ -74,8 +74,12 @@ export class EmbyClient {
   }
 
   // ---- low-level -----------------------------------------------------------
+  // Token is carried three ways for maximum server compatibility: embedded in
+  // the X-Emby-Authorization header (canonical), as X-Emby-Token, AND as an
+  // ?api_key= query param -- some Emby builds/reverse-proxies honour only one.
   _authHeader() {
-    return `MediaBrowser Client="${CLIENT}", Device="Browser", DeviceId="${this.deviceId}", Version="${VERSION}"`;
+    return `MediaBrowser Client="${CLIENT}", Device="Browser", DeviceId="${this.deviceId}", Version="${VERSION}"`
+      + (this.token ? `, Token="${this.token}"` : '');
   }
   _headers(json) {
     const h = { 'X-Emby-Authorization': this._authHeader() };
@@ -86,6 +90,7 @@ export class EmbyClient {
   _url(path, params) {
     const u = new URL(this.server + path);
     if (params) for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
+    if (this.token && !u.searchParams.has('api_key')) u.searchParams.set('api_key', this.token);
     return u.toString();
   }
   async _get(path, params) {
