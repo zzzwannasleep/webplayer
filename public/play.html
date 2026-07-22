@@ -157,7 +157,7 @@
 </style>
 
 <header>
-  <a class="btn ghost" href="./emby.html">← 媒体库</a>
+  <a class="btn ghost" id="backBtn" href="./emby.html">← 返回</a>
   <div class="title" id="title">播放</div>
   <div class="spacer"></div>
 </header>
@@ -513,6 +513,12 @@ function paintProgress() {
   seek.setAttribute('aria-valuemax', String(Math.round(d)));
   seek.setAttribute('aria-valuetext', `${clock(video.currentTime)} / ${clock(d)}`);
 }
+// Back = one step up the history. emby.html's view chain (home → library →
+// library detail → series detail) lives only in its DOM, not the URL, so it was
+// frozen into bfcache when it did location.href to reach us; history.back()
+// restores that exact view instead of fresh-loading emby.html back to the top.
+// Fall back to the href only when there's nothing to pop (opened directly / new tab).
+$('#backBtn').addEventListener('click', e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
 const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
 $('#ppBtn').addEventListener('click', togglePlay);
 video.addEventListener('click', togglePlay);
