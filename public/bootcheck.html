@@ -40,6 +40,13 @@ async function boot(page) {
   ok(`${page} gear opens a group list`, groups.length > 0, groups.join(' | ') || 'empty');
   ok(`${page} the group list has a 弹幕 entry`, groups.includes('弹幕'));
   ok(`${page} the root list has no bare controls`, root.querySelectorAll('select,input').length === 0);
+  root.querySelector('[data-group="dmk"]').click();
+  await sleep(100);
+  ok(`${page} opening 弹幕 leaves the menu open`, !root.hidden, 'hidden=' + root.hidden);
+  ok(`${page} 弹幕 panel really rendered`, root.querySelectorAll('input').length > 3, root.querySelectorAll('input').length + ' controls');
+  root.querySelector('[data-back]').click();
+  await sleep(100);
+  ok(`${page} back leaves the menu open too`, !root.hidden && root.querySelectorAll('.mrow[data-group]').length > 0, 'hidden=' + root.hidden);
   f.remove();
 }
 
@@ -71,6 +78,12 @@ async function loaded(page) {
 
   root.querySelector('[data-group="track"]').click();
   await sleep(80);
+  // The menu must still be OPEN. Rendering the panel is not enough: the click
+  // that opened it used to bubble to the page's outside-click handler, which
+  // tested `contains(e.target)` on a node innerHTML had just detached, decided
+  // the click was outside, and shut the whole thing. The panel HTML was there
+  // the whole time -- which is exactly why only this assertion catches it.
+  ok('loaded: opening a panel leaves the menu open', !root.hidden, 'hidden=' + root.hidden);
   const audio = root.querySelector('select[data-row="audio"]');
   ok('loaded: the 轨道 panel has the audio picker', !!audio, audio ? audio.options.length + ' options' : 'missing');
   if (audio && audio.options.length > 1) {

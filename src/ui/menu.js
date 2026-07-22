@@ -23,6 +23,14 @@ export class SettingsMenu {
     this.groups = [];
     this.open = null;          // key of the group whose panel is showing
     root.addEventListener('click', e => {
+      // Stopped before anything else. Navigating repaints the popover with
+      // innerHTML, so by the time this click reaches document the element it
+      // came from is detached -- and the page's "a click outside closes the
+      // menu" test is `popover.contains(e.target)`, which is false for a node
+      // that is no longer in the tree. Result: opening a panel shut the whole
+      // menu. A click inside the menu is never a click outside it, so it has
+      // no business reaching document at all.
+      e.stopPropagation();
       const g = e.target.closest('[data-group]');
       if (g) { this.open = g.dataset.group; return this.render(); }
       if (e.target.closest('[data-back]')) { this.open = null; return this.render(); }
