@@ -40,7 +40,8 @@
   .navbtn.on{color:var(--accent)}
   .navbtn.on::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:3px;background:var(--accent)}
   .rail-sp{flex:1}
-  .avatar{width:36px;height:36px;border-radius:50%;background:conic-gradient(from 210deg,#6a7cff,#b06aff,#ff8a6a,#6a7cff);border:2px solid var(--surface-2);margin-top:6px;cursor:pointer}
+  .avatar{position:relative;overflow:hidden;width:36px;height:36px;border-radius:50%;background:conic-gradient(from 210deg,#6a7cff,#b06aff,#ff8a6a,#6a7cff);border:2px solid var(--surface-2);margin-top:6px;cursor:pointer}
+  .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 
   #view{position:relative;overflow-y:auto;overflow-x:hidden}
   #topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:14px;padding:14px 32px;backdrop-filter:blur(14px);background:linear-gradient(180deg,rgba(var(--bg-rgb),.86),rgba(var(--bg-rgb),.3) 70%,transparent);transition:background .3s}
@@ -199,6 +200,22 @@
   .lusers{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 16px}
   .luser{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:5px 12px 5px 5px;font-size:13px;color:#fff;cursor:pointer}
   .luser .ua{width:26px;height:26px;border-radius:50%;background:conic-gradient(from 210deg,#6a7cff,#b06aff,#ff8a6a,#6a7cff)}
+  /* remembered servers */
+  .lsrvs{margin:0 0 16px}
+  .lsrvs .lcap{font-size:12px;color:#8a95a3;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+  .lsrv{display:flex;align-items:center;gap:9px;width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:9px 10px 9px 12px;margin-bottom:7px;cursor:pointer;transition:.18s}
+  .lsrv:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25)}
+  /* icon box: the letter is the floor, an <img> covers it when one loads */
+  .sic{position:relative;width:34px;height:34px;border-radius:10px;flex:0 0 auto;overflow:hidden;display:grid;place-items:center;
+       background:linear-gradient(140deg,#2b3346,#1a1f2b);border:1px solid rgba(255,255,255,.12);font-weight:800;font-size:15px;color:#fff}
+  .sic img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .lsrv .si{min-width:0;flex:1;text-align:left}
+  .lsrv .sn{font-size:13.5px;font-weight:600;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lsrv .su{font-size:11.5px;color:#8a95a3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+  .lsrv .sg{font-size:11px;font-weight:700;border-radius:5px;padding:2px 7px;background:rgba(52,199,89,.16);color:#6ee08c;white-space:nowrap}
+  .lsrv .sg.off{background:rgba(255,255,255,.08);color:#8a95a3}
+  .lsrv .sx{width:26px;height:26px;border-radius:50%;color:#8a95a3;font-size:16px;line-height:1;flex:0 0 auto}
+  .lsrv .sx:hover{background:rgba(255,255,255,.12);color:#fff}
 
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);z-index:120;background:var(--ink-3);border:1px solid var(--line);border-radius:12px;padding:12px 20px;font-size:14px;box-shadow:0 20px 50px -20px #000;opacity:0;pointer-events:none;transition:.3s}
   #toast.show{opacity:1;transform:translateX(-50%)}
@@ -212,6 +229,7 @@
   <div class="lbox">
     <div class="lbrand"><div class="b">L</div><div class="t">LinWeb<small>连接到 Emby 服务器</small></div></div>
     <p class="lsub">登录后浏览你的媒体库,原盘直连、零转码,HDR / Dolby Vision / 特效字幕原样交给浏览器解码。</p>
+    <div class="lsrvs" id="lServers"></div>
     <div class="lfield"><label>服务器地址</label><input id="lServer" placeholder="https://your-emby:8920" spellcheck="false"></div>
     <div class="lfield"><label>用户名</label><input id="lUser" spellcheck="false" autocomplete="username"></div>
     <div class="lusers" id="lUsers"></div>
@@ -286,7 +304,7 @@
 <div id="toast"></div>
 
 <script type="module">
-import { EmbyClient, fmtRuntime, ticksToSec, progressOf, subtitleDelivery } from '../src/emby/client.js';
+import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery } from '../src/emby/client.js';
 
 const $ = s => document.querySelector(s);
 const store = { get(k,d){try{const v=localStorage.getItem('linweb:'+k);return v==null?d:JSON.parse(v);}catch{return d;}}, set(k,v){try{localStorage.setItem('linweb:'+k,JSON.stringify(v));}catch{}} };
@@ -601,8 +619,47 @@ function fail(e){
 // ---------- login ----------
 async function showLogin(){
   $('#app').classList.add('hidden'); $('#login').classList.add('open');
-  const s = store.get('emby', null);
-  if (s?.server) { $('#lServer').value = s.server; probeUsers(s.server); }
+  renderServers();
+  const last = servers.all()[0];
+  if (last && !$('#lServer').value) { $('#lServer').value = last.url; probeUsers(last.url); }
+}
+
+// Remembered servers: one row each, newest first. A row whose token survived
+// logs straight back in; otherwise it just fills the form. This is the whole
+// point of keeping the record after logout -- switching server or account never
+// means retyping an address.
+function renderServers(){
+  const list = servers.all();
+  const box = $('#lServers');
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="lcap">已记住的服务器</div>` + list.map((s,i)=>`
+    <div class="lsrv" data-i="${i}">
+      <div class="sic">${hostOf(s.url)[0].toUpperCase()}<img alt=""></div>
+      <div class="si"><div class="sn">${hostOf(s.url)}${s.userName?` · ${s.userName}`:''}</div><div class="su">${s.url}${s.lines?.length?` · ${s.lines.length} 条线路`:''}</div></div>
+      <span class="sg${s.token?'':' off'}">${s.token?'已登录':'需密码'}</span>
+      <button class="sx" data-x="${i}" title="忘记这台服务器">×</button>
+    </div>`).join('');
+  box.querySelectorAll('.lsrv').forEach(el=>tryIcons(el.querySelector('img'), serverIcons(list[+el.dataset.i])));
+  box.querySelectorAll('.lsrv').forEach(el=>el.onclick = e => {
+    const s = list[+el.dataset.i];
+    if (e.target.dataset.x != null) { e.stopPropagation(); servers.forget(s.url); renderServers(); return; }
+    $('#lServer').value = s.url;
+    if (s.userName) $('#lUser').value = s.userName;
+    const c = EmbyClient.from(s);
+    if (c) { EM = c; enterApp(); } else { probeUsers(s.url); $('#lPass').focus(); }
+  });
+}
+const hostOf = u => { try { return new URL(u).host; } catch { return u || '?'; } };
+// Walk the candidate icon URLs (server branding, then user avatar) letting the
+// browser do the probing: each failure advances to the next, and running out
+// drops the <img> so whatever is painted underneath -- the letter, the gradient
+// avatar -- shows through. No fetch, no CORS, no round-trip when there is none.
+function tryIcons(img, urls){
+  if (!img) return;
+  let i = 0;
+  const next = () => { if (i < urls.length) img.src = urls[i++]; else img.remove(); };
+  img.onerror = next;
+  next();
 }
 async function probeUsers(server){
   try {
@@ -622,7 +679,7 @@ $('#lGo').onclick = async () => {
   $('#lGo').disabled=true; $('#lGo').textContent='登录中…';
   try {
     EM = new EmbyClient(server); await EM.login(user, pass);
-    store.set('emby', { server: EM.server }); enterApp();
+    enterApp();                       // login() already remembered the server
   } catch (e) { $('#lErr').textContent = /Failed to fetch|NetworkError/i.test(e.message) ? connErr(server) : e.message; }
   finally { $('#lGo').disabled=false; $('#lGo').textContent='登录'; }
 };
@@ -632,10 +689,27 @@ $('#avatarBtn').onclick = () => { if (confirm(`退出登录 ${EM?.userName||''}?
 
 function enterApp(){
   $('#login').classList.remove('open'); $('#app').classList.remove('hidden');
-  $('#serverPill').textContent = `◉ ${EM.userName||'已连接'}`;
+  paintPill();
   $('#avatarBtn').title = `${EM.userName} · 点击退出`;
+  $('#avatarBtn').innerHTML = '<img alt="">';
+  tryIcons($('#avatarBtn img'), EM.icons());   // server branding, else the user's avatar
   go('home');
+  // Refresh the line list in the background; play.html reads it from the same
+  // remembered-server record. Best-effort: a server without the add-on has none.
+  EM.syncLines().then(l => { if (l.length) { paintPill(); toastLines(l.length); } }).catch(()=>{});
 }
+function paintPill(){
+  const lines = EM.allLines();
+  const cur = lines.find(l => l.url === EM.server);
+  $('#serverPill').textContent = `◉ ${EM.userName||'已连接'}${lines.length>1?` · ${cur?.name||'线路'}`:''}`;
+  $('#serverPill').title = `${EM.server} · 点击切换服务器`;
+}
+let toldLines = false;
+function toastLines(n){ if (toldLines) return; toldLines = true; toast(`已同步 ${n} 条线路,播放页可切换`); }
+// Switch server / account without logging out: the current server is a row in
+// the list, so clicking it comes straight back in.
+$('#serverPill').style.cursor = 'pointer';
+$('#serverPill').onclick = () => showLogin();
 
 // ---------- boot ----------
 (function boot(){

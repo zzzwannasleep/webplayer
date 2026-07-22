@@ -208,7 +208,7 @@
 import { Player } from '../src/player.js';
 import { Subtitles, attachSrt } from '../src/subs/index.js';
 import { VolumeStage } from '../src/audio/gain.js';
-import { EmbyClient } from '../src/emby/client.js';
+import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
 
 const $ = s => document.querySelector(s);
@@ -260,6 +260,10 @@ const srcRef = { Id: WANT.src };
 
 let info = null;
 let a4kMode = 'off';        // surviving Anime4K choice: 'off' | 'A' | 'B' | 'C'
+// The domain this page is streaming from. emby.html built WANT.url against it,
+// so it is also the prefix switchLine() rewrites away from.
+const LINES = EM ? EM.allLines() : [];
+let line = EM?.server || '';
 
 async function load(input) {
   try {
@@ -320,6 +324,8 @@ function render() {
     : '';
 
   $('#picks').innerHTML =
+    (LINES.length > 1 ? `<div class="menu-row"><span>线路</span><select id="lineSel" aria-label="线路">${
+      LINES.map(l => `<option value="${l.url}"${l.url === line ? ' selected' : ''}>${l.name}</option>`).join('')}</select></div>` : '') +
     field('视频', 'videoSel', info.video,
       (x, i) => `<option value="${i}"${x.supported ? '' : ' disabled'}>${x.label}${x.supported ? '' : ' ✕ 无法播放'}</option>`) +
     field('音频', 'audioSel', info.audio,
@@ -343,6 +349,7 @@ function render() {
           </select></div><div class="menu-note">仅 SDR 动画 · GPU 超分，开启时占用整帧渲染</div>` : '');
 
   $('#subSel')?.addEventListener('change', e => applySubtitle(Number(e.target.value)));
+  $('#lineSel')?.addEventListener('change', e => switchLine(e.target.value));
   const a4kSel = $('#a4kSel');
   if (a4kSel) { a4kSel.value = a4kMode; a4kSel.addEventListener('change', e => applyAnime4K(e.target.value)); }
   $('#gainSel')?.addEventListener('change', e => {
@@ -388,6 +395,8 @@ function seedChoice() {
 // each play() does; its mode is re-asserted on every metadata load.
 let extTrack = null;
 async function attachEmbySub() {
+  // a reload (line switch) keeps the <track> that is already there
+  if (extTrack) { extTrack.track.mode = 'showing'; return; }
   try {
     const srt = await fetch(WANT.suburl).then(r => { if (!r.ok) throw new Error('字幕 ' + r.status); return r.text(); });
     extTrack = attachSrt(video, srt, { label: WANT.sublabel, language: WANT.sublang || 'und', asDefault: true });
@@ -453,12 +462,38 @@ for (const id of ['#videoSel', '#audioSel']) {
 }
 
 // ---- resume position ----------------------------------------------------
-if (WANT.t) {
-  const seekOnce = () => {
-    video.removeEventListener('loadeddata', seekOnce);
-    if (Number.isFinite(video.duration) && WANT.t < video.duration) { try { video.currentTime = WANT.t; } catch {} }
-  };
-  video.addEventListener('loadeddata', seekOnce);
+// Used twice: the position emby.html handed over, and the playhead carried
+// across a line switch (which reloads the stream from scratch).
+let resumeAt = 0;
+const seekOnce = () => {
+  video.removeEventListener('loadeddata', seekOnce);
+  const t = resumeAt; resumeAt = 0;
+  if (t && Number.isFinite(video.duration) && t < video.duration) { try { video.currentTime = t; } catch {} }
+};
+function armResume(t) { if (!t) return; resumeAt = t; video.addEventListener('loadeddata', seekOnce); }
+armResume(WANT.t);
+
+// ---- line switching -----------------------------------------------------
+// Same server, another entry domain (see EmbyClient#lines). Everything the
+// session points at is re-pointed -- the stream, any Emby-served subtitle, and
+// the client itself so progress reports and posters follow -- then the stream
+// is reloaded at the current playhead. Nothing about the item changes, so the
+// track choices are re-seeded by render() exactly as on first load.
+let switching = false;
+async function switchLine(to) {
+  const sel = $('#lineSel');
+  if (!EM || switching || !to || to === line) return;
+  switching = true;
+  if (sel) sel.disabled = true;
+  const at = video.currentTime;
+  try {
+    WANT.url = reline(WANT.url, line, to);
+    if (WANT.suburl) WANT.suburl = reline(WANT.suburl, line, to);
+    line = EM.useLine(to);
+    player.log(`切换线路 → ${LINES.find(l => l.url === to)?.name || to}`);
+    armResume(at);
+    await load(WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+  } finally { switching = false; if ($('#lineSel')) $('#lineSel').disabled = false; }
 }
 
 // ---- Emby session lifecycle: start / progress / stopped -----------------

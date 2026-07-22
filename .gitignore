@@ -40,3 +40,6 @@ dist/
 
 # Local secrets -- Emby server lines / credentials. Never commit.
 *.env
+
+# Web Storage file created by `npm test` (tools/test-emby.mjs).
+.linweb-test-ls*

@@ -19,6 +19,52 @@
 const CLIENT = 'LinWeb';
 const VERSION = '0.1.0';
 
+const norm = u => (u || '').trim().replace(/\/+$/, '');
+
+// ---- remembered servers ----------------------------------------------------
+// Every server the user has logged into, newest first: address, last user, its
+// access token and the line list synced from the server. Deliberately SURVIVES
+// logout -- logging out drops the token for that server, not the server itself.
+// That is what lets the login page switch between servers/accounts instead of
+// facing an empty address box.
+const SERVERS_KEY = 'linweb:servers';
+const readServers = () => { try { return JSON.parse(localStorage.getItem(SERVERS_KEY)) || []; } catch { return []; } };
+const writeServers = l => { try { localStorage.setItem(SERVERS_KEY, JSON.stringify(l)); } catch {} };
+
+export const servers = {
+  all: readServers,
+  get: url => readServers().find(s => s.url === norm(url)) || null,
+  // merge-and-promote: an update keeps the fields it doesn't mention (a line
+  // sync must not wipe the token) and moves the server to the front.
+  put(rec) {
+    const url = norm(rec.url);
+    writeServers([{ ...servers.get(url), ...rec, url }, ...readServers().filter(s => s.url !== url)]);
+  },
+  forget(url) { writeServers(readServers().filter(s => s.url !== norm(url))); },
+};
+
+// Candidate icons for a server, best first: the server's own branding image
+// from the API, then the signed-in user's avatar. Returned as a list rather
+// than probed here on purpose -- the <img> that displays it walks the list with
+// onerror, so a missing icon costs no extra request and no CORS exposure.
+export function serverIcons(rec) {
+  const base = norm(rec?.line || rec?.url);
+  if (!base) return [];
+  const q = rec.token ? `?api_key=${encodeURIComponent(rec.token)}&maxWidth=96` : '?maxWidth=96';
+  const urls = [`${base}/Branding/Splashscreen${q}`];
+  if (rec.userId) urls.push(`${base}/Users/${rec.userId}/Images/Primary${q}`);
+  return urls;
+}
+
+// Re-point a URL built against one domain at another. Used to switch lines
+// mid-playback: same Emby, same path, different way in.
+export function reline(url, from, to) {
+  if (!url || !to || from === to) return url;
+  if (from && url.startsWith(from)) return to + url.slice(from.length);
+  const u = new URL(url);                       // different host than expected: keep path+query only
+  return to + u.pathname + u.search;
+}
+
 function deviceId() {
   try {
     let id = localStorage.getItem('linweb:deviceId');
@@ -47,8 +93,12 @@ const DIRECT_PROFILE = {
 };
 
 export class EmbyClient {
-  constructor(server) {
-    this.server = server ? server.replace(/\/+$/, '') : '';
+  // `home` is the address the account belongs to and the key everything is
+  // remembered under; `server` is the domain actually being talked to. They
+  // differ once the viewer picks another line, and only `server` moves.
+  constructor(server, line) {
+    this.home = norm(server);
+    this.server = norm(line) || this.home;
     this.token = null;
     this.userId = null;
     this.userName = null;
@@ -59,19 +109,59 @@ export class EmbyClient {
   static restore() {
     try {
       const s = JSON.parse(localStorage.getItem('linweb:emby') || 'null');
-      if (!s?.server || !s?.token) return null;
-      const c = new EmbyClient(s.server);
+      if (!s?.token || !(s.home || s.server)) return null;
+      const c = new EmbyClient(s.home || s.server, s.server);
       c.token = s.token; c.userId = s.userId; c.userName = s.userName;
       return c;
     } catch { return null; }
   }
+  // Sign in from a remembered server record, no password needed.
+  static from(rec) {
+    if (!rec?.url || !rec.token) return null;
+    const c = new EmbyClient(rec.url, rec.line);
+    c.token = rec.token; c.userId = rec.userId; c.userName = rec.userName;
+    c._persist();
+    return c;
+  }
   _persist() {
-    try { localStorage.setItem('linweb:emby', JSON.stringify({ server: this.server, token: this.token, userId: this.userId, userName: this.userName })); } catch {}
+    try { localStorage.setItem('linweb:emby', JSON.stringify({ home: this.home, server: this.server, token: this.token, userId: this.userId, userName: this.userName })); } catch {}
+    servers.put({ url: this.home, line: this.server, token: this.token, userId: this.userId, userName: this.userName });
   }
   logout() {
+    servers.put({ url: this.home, token: null });   // keep the server, drop the token
     this.token = this.userId = this.userName = null;
     try { localStorage.removeItem('linweb:emby'); } catch {}
   }
+
+  // ---- lines (uhdnow/emby_ext_domains) -------------------------------------
+  // That add-on bolts an endpoint onto the server listing its alternative entry
+  // domains -- same Emby and same token, different route in, so a slow or
+  // blocked line can be swapped without touching the session. Token-gated;
+  // servers without the add-on just 404, which means "no extra lines" and the
+  // home address keeps working.
+  async lines() {
+    for (const path of ['/emby/System/Ext/ServerDomains', '/System/Ext/ServerDomains']) {
+      try {
+        const r = await this._get(path);
+        const list = (r?.data || []).filter(d => d?.url).map(d => ({ name: d.name || d.url, url: norm(d.url) }));
+        if (list.length) return list;
+      } catch {}
+    }
+    return [];
+  }
+  async syncLines() {
+    const list = await this.lines();
+    servers.put({ url: this.home, lines: list });
+    return list;
+  }
+  // What the viewer can pick from: the home address first, then the synced ones.
+  allLines() {
+    const out = [{ name: '主线路', url: this.home }];
+    for (const l of servers.get(this.home)?.lines || []) if (l.url !== this.home) out.push(l);
+    return out;
+  }
+  useLine(url) { this.server = norm(url) || this.home; this._persist(); return this.server; }
+  icons() { return serverIcons({ line: this.server, token: this.token, userId: this.userId }); }
 
   // ---- low-level -----------------------------------------------------------
   // CORS-critical: use the STANDARD `Authorization` header, never the Emby-
