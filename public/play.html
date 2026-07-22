@@ -54,11 +54,13 @@
   }
   video { width:100%; height:100%; display:block; background:#000; }
   #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-  /* Edge composites JASSUB's worker OffscreenCanvas as an opaque quad windowed;
-     `screen` forces it to blend with the video. Honoured differently in
-     fullscreen, so dropped there. Scoped to .JASSUB (PGS is a 2D canvas). */
-  #stage canvas.JASSUB { mix-blend-mode: screen; }
-  #stage:fullscreen canvas.JASSUB { mix-blend-mode: normal; }
+  /* Edge composites JASSUB's worker OffscreenCanvas as an opaque quad windowed,
+     blacking out the picture. `screen` blend fixed that but, being lighten-only,
+     erased dark subtitle fills (left only the outline). A `filter` forces the
+     same alpha-aware composite surface without touching colour, so fill + outline
+     render true. Dropped in fullscreen (alpha honoured there). .JASSUB only. */
+  #stage canvas.JASSUB { filter: opacity(0.996); }
+  #stage:fullscreen canvas.JASSUB { filter: none; }
   video::cue { background:rgba(0,0,0,.55); color:#fff; }
 
   .placeholder {

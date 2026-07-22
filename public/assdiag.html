@@ -100,6 +100,11 @@ async function run() {
   if (fix === 'mixScreen')  { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'screen';  say('FIX applied: canvas mix-blend-mode:screen', 'hi'); }
   if (fix === 'mixLighten') { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'lighten'; say('FIX applied: canvas mix-blend-mode:lighten', 'hi'); }
   if (fix === 'mixPlus')    { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.mixBlendMode = 'plus-lighter'; say('FIX applied: canvas mix-blend-mode:plus-lighter', 'hi'); }
+  // The SHIPPED fix: a `filter` forces the canvas onto a real render surface
+  // (alpha-aware, off the opaque DC-overlay path) WITHOUT altering colour, unlike
+  // the mix-blend modes above which are lighten-only and erase dark fills. If this
+  // brings the picture back AND keeps fill colours, it beats every mix-blend.
+  if (fix === 'filterOp') { const c = d.querySelector('canvas.JASSUB'); if (c) c.style.filter = 'opacity(0.996)'; say('FIX applied: canvas filter:opacity(0.996) [shipped]', 'hi'); }
 
   // Let JASSUB boot, size its canvas, and push a few events.
   const canvas = overlayOn ? await (async () => {

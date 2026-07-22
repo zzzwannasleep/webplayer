@@ -65,17 +65,21 @@
      not displace, and must not swallow clicks on the controls beneath it. */
   #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
   /* Edge/Chromium composites JASSUB's worker-side OffscreenCanvas (WebGL) as an
-     OPAQUE quad in a normal window: its transparent framebuffer blacks out the
-     whole picture and only the subtitle text is left. Proven by screenshotting
-     the real composite (tools/shot-page.ps1 over public/assdiag.html) -- the
-     <video> keeps decoding live frames the whole time; it is a DirectComposition
-     alpha bug, not the renderer. `screen` forces the canvas to blend with the
-     video instead of standing over it as an opaque quad. Fullscreen takes a
-     different path where the alpha IS honoured, so the blend is dropped there to
-     keep effect subtitles pristine. PGS draws to a main-thread 2D canvas and is
-     unaffected, so this is scoped to .JASSUB. */
-  #stage canvas.JASSUB { mix-blend-mode: screen; }
-  #stage:fullscreen canvas.JASSUB { mix-blend-mode: normal; }
+     OPAQUE DirectComposition quad in a normal window: its transparent framebuffer
+     blacks out the whole picture (proven by screenshotting the real composite,
+     tools/shot-page.ps1 over public/assdiag.html -- the <video> keeps decoding
+     live frames; it is a compositor alpha bug, not the renderer). `mix-blend-mode:
+     screen` fixed the black picture, but being a lighten-only blend it ERASED
+     dark/saturated subtitle fills -- leaving only the bright outline, and dropping
+     dark-filled effect lines entirely. A `filter` forces the canvas onto the same
+     alpha-aware composite surface WITHOUT altering colour (plain source-over), so
+     fill AND outline render true. Unlike CSS `opacity`/`translateZ` (which still
+     promote to a DC overlay quad) a filter forces a real render surface;
+     opacity(0.996) is imperceptible and cheap. Fullscreen honours alpha on its own
+     path, so the filter is dropped there to skip a per-frame full-frame pass at 4K.
+     PGS draws to a main-thread 2D canvas and is unaffected, so scoped to .JASSUB. */
+  #stage canvas.JASSUB { filter: opacity(0.996); }  /* ponytail: forces alpha-aware compositing without touching colour; ceiling is JASSUB 2.x's mandatory offscreen render (no main-thread path in 2.5.7) */
+  #stage:fullscreen canvas.JASSUB { filter: none; }
 
   .placeholder {
     position:absolute; inset:0; display:flex; flex-direction:column;
