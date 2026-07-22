@@ -111,7 +111,7 @@ export class EmbyClient {
       const s = JSON.parse(localStorage.getItem('linweb:emby') || 'null');
       if (!s?.token || !(s.home || s.server)) return null;
       const c = new EmbyClient(s.home || s.server, s.server);
-      c.token = s.token; c.userId = s.userId; c.userName = s.userName;
+      c.token = s.token; c.userId = s.userId; c.userName = s.userName; c.policy = s.policy || {};
       return c;
     } catch { return null; }
   }
@@ -119,14 +119,22 @@ export class EmbyClient {
   static from(rec) {
     if (!rec?.url || !rec.token) return null;
     const c = new EmbyClient(rec.url, rec.line);
-    c.token = rec.token; c.userId = rec.userId; c.userName = rec.userName;
+    c.token = rec.token; c.userId = rec.userId; c.userName = rec.userName; c.policy = rec.policy || {};
     c._persist();
     return c;
   }
   _persist() {
-    try { localStorage.setItem('linweb:emby', JSON.stringify({ home: this.home, server: this.server, token: this.token, userId: this.userId, userName: this.userName })); } catch {}
-    servers.put({ url: this.home, line: this.server, token: this.token, userId: this.userId, userName: this.userName });
+    const s = { home: this.home, server: this.server, token: this.token, userId: this.userId, userName: this.userName, policy: this.policy };
+    try { localStorage.setItem('linweb:emby', JSON.stringify(s)); } catch {}
+    servers.put({ url: this.home, line: this.server, token: this.token, userId: this.userId, userName: this.userName, policy: this.policy });
   }
+  // A restored session predates the policy field, and a policy can be revoked
+  // server-side between sessions; re-read it so the menus match reality.
+  async refreshPolicy() {
+    try { this.policy = (await this._get(`/Users/${this.userId}`))?.Policy || this.policy || {}; this._persist(); } catch {}
+    return this.policy;
+  }
+  get isAdmin() { return !!this.policy?.IsAdministrator; }
   logout() {
     servers.put({ url: this.home, token: null });   // keep the server, drop the token
     this.token = this.userId = this.userName = null;
@@ -197,6 +205,11 @@ export class EmbyClient {
     if (!r.ok) throw new Error(`Emby ${r.status} ${path}`);
     return r.status === 204 ? null : r.json().catch(() => null);
   }
+  async _del(path, params) {
+    const r = await fetch(this._url(path, params), { method: 'DELETE', headers: this._headers() });
+    if (!r.ok) throw new Error(`Emby ${r.status} ${path}`);
+    return r.status === 204 ? null : r.json().catch(() => null);
+  }
 
   // ---- auth ----------------------------------------------------------------
   async login(username, password) {
@@ -210,6 +223,10 @@ export class EmbyClient {
     this.token = data.AccessToken;
     this.userId = data.User?.Id;
     this.userName = data.User?.Name;
+    // What this account is ALLOWED to do. Measured, never assumed: two live
+    // servers proved the same UI must offer different menus per account
+    // (IsAdministrator, EnableContentDeletion, EnableContentDownloading).
+    this.policy = data.User?.Policy || {};
     this._persist();
     return data.User;
   }
@@ -314,6 +331,80 @@ export class EmbyClient {
     if (this.token) p.set('api_key', this.token);
     return `${this.server}/Videos/${itemId}/${source?.Id || itemId}/Subtitles/${stream.Index}/Stream.${format}?${p}`;
   }
+
+  // ---- item actions: what Emby's own right-click menu offers ---------------
+  // Measured against two live servers: PlayedItems / FavoriteItems answer 405 to
+  // a GET, i.e. the route exists and POST/DELETE is the way in. A reverse-proxied
+  // Emby hides whole branches of the API (verified: the same paths 404 there), so
+  // every one of these can legitimately fail — callers surface that as "this
+  // server does not allow it", never as a silent no-op.
+  markPlayed(id, played = true) {
+    const p = `/Users/${this.userId}/PlayedItems/${id}`;
+    return played ? this._post(p) : this._del(p);
+  }
+  setFavorite(id, fav = true) {
+    const p = `/Users/${this.userId}/FavoriteItems/${id}`;
+    return fav ? this._post(p) : this._del(p);
+  }
+  // Emby's thumbs up/down. null clears it.
+  setLike(id, likes) {
+    const p = `/Users/${this.userId}/Items/${id}/Rating`;
+    return likes == null ? this._del(p) : this._post(p, null, { Likes: likes });
+  }
+  similar(id, limit = 12) {
+    return this._get(`/Items/${id}/Similar`, { UserId: this.userId, Limit: limit, Fields: EmbyClient.FIELDS }).then(r => r.Items || []);
+  }
+  playlists() { return this.items({ types: 'Playlist', recursive: true, limit: 100 }); }
+  createPlaylist(name, ids) {
+    return this._post('/Playlists', null, { Name: name, Ids: [].concat(ids).join(','), UserId: this.userId, MediaType: 'Video' });
+  }
+  addToPlaylist(playlistId, ids) {
+    return this._post(`/Playlists/${playlistId}/Items`, null, { Ids: [].concat(ids).join(','), UserId: this.userId });
+  }
+  deleteItem(id) { return this._del(`/Items/${id}`); }
+  // replaceAll = Emby's "replace all metadata", i.e. re-scrape rather than fill gaps.
+  refreshMetadata(id, { replaceAll = false, recursive = false } = {}) {
+    return this._post(`/Items/${id}/Refresh`, null, {
+      Recursive: recursive,
+      MetadataRefreshMode: replaceAll ? 'FullRefresh' : 'Default',
+      ImageRefreshMode: replaceAll ? 'FullRefresh' : 'Default',
+      ReplaceAllMetadata: replaceAll, ReplaceAllImages: replaceAll,
+    });
+  }
+  // Emby wants the WHOLE item back, not a patch: send the item you read, edited.
+  updateItem(item) { return this._post(`/Items/${item.Id}`, item); }
+  // "Identify": search the metadata providers, then apply one of the hits.
+  remoteSearch(type, { name, year, itemId }) {
+    return this._post(`/Items/RemoteSearch/${type}`, {
+      SearchInfo: { Name: name, Year: year || null, ProviderIds: {} },
+      ItemId: itemId, IncludeDisabledProviders: true,
+    }).then(r => r || []);
+  }
+  applyRemoteSearch(id, result, replaceImages = true) {
+    return this._post(`/Items/RemoteSearch/Apply/${id}`, result, { ReplaceAllImages: replaceImages });
+  }
+
+  // ---- admin ---------------------------------------------------------------
+  // Only reachable with IsAdministrator, and even then a proxied server may have
+  // the route stripped (measured: /ScheduledTasks and /Sessions 404 on one line
+  // while /System/Info and /Library/VirtualFolders answer fine). The dashboard
+  // therefore probes each card independently instead of assuming a whole tier.
+  systemInfo() { return this._get('/System/Info'); }
+  itemCounts() { return this._get('/Items/Counts'); }
+  allUsers() { return this._get('/Users'); }
+  virtualFolders() { return this._get('/Library/VirtualFolders'); }
+  scanAll() { return this._post('/Library/Refresh'); }
+  tasks() { return this._get('/ScheduledTasks'); }
+  runTask(id) { return this._post(`/ScheduledTasks/Running/${id}`); }
+  stopTask(id) { return this._del(`/ScheduledTasks/Running/${id}`); }
+  activity(limit = 20) { return this._get('/System/ActivityLog/Entries', { Limit: limit }).then(r => r.Items || []); }
+  sessions() { return this._get('/Sessions'); }
+  sessionMessage(id, text) { return this._post(`/Sessions/${id}/Message`, { Text: text, Header: 'LinWeb', TimeoutMs: 8000 }); }
+  sessionStop(id) { return this._post(`/Sessions/${id}/Playing/Stop`); }
+  devices() { return this._get('/Devices').then(r => r.Items || r || []); }
+  deleteDevice(id) { return this._del('/Devices', { Id: id }); }
+  setUserPolicy(userId, policy) { return this._post(`/Users/${userId}/Policy`, policy); }
+  restartServer() { return this._post('/System/Restart'); }
 
   // ---- progress (best-effort: never let a report break playback) -----------
   reportStart(itemId, source, playSessionId) {

@@ -43,3 +43,7 @@ dist/
 
 # Web Storage file created by `npm test` (tools/test-emby.mjs).
 .linweb-test-ls*
+
+# Throwaway localStorage-seeding pages used to drive real-server UI checks.
+# They hold live tokens: never committable.
+public/_*.html

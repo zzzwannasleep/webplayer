@@ -45,6 +45,9 @@
   :root[data-theme=light] .brand img{filter:none}
   @media (prefers-color-scheme:light){:root:not([data-theme]) .brand img{filter:none}}
   .navbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:var(--fg-mute);position:relative;transition:.25s var(--ease-out)}
+  /* an explicit `display` beats the UA rule for [hidden], so hiding the admin
+     button by attribute did nothing until this line existed */
+  [hidden]{display:none!important}
   .navbtn svg{width:22px;height:22px}
   .navbtn:hover{color:var(--fg);background:var(--hover)}
   .navbtn.on{color:var(--accent)}
@@ -104,6 +107,12 @@
   .poster{width:150px;aspect-ratio:2/3;border-radius:14px;background-size:cover;background-position:center;position:relative;box-shadow:0 8px 24px -12px #000;border:1px solid var(--surface);overflow:hidden}
   .card:hover .poster{box-shadow:0 26px 50px -16px #000c,0 0 0 1px var(--accent)}
   .land .poster{width:300px;aspect-ratio:16/9}
+  .cmore{position:absolute;top:7px;right:7px;width:28px;height:28px;border-radius:9px;border:0;z-index:3;
+          background:rgba(0,0,0,.62);color:#fff;display:grid;place-items:center;font-size:16px;line-height:1;
+          cursor:pointer;opacity:0;transition:opacity .16s,background .16s;backdrop-filter:blur(6px)}
+  .card:hover .cmore,.gcell:hover .cmore,.cmore:focus-visible{opacity:1}
+  .cmore:hover{background:rgba(0,0,0,.88)}
+  @media (hover:none){.cmore{opacity:1}}
   .pw{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.5)}
   .pw i{display:block;height:100%;background:var(--accent)}
   .ctitle{font-size:13px;font-weight:600;margin-top:9px;width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -233,6 +242,67 @@
   .lsrv .sx{width:26px;height:26px;border-radius:50%;color:#8a95a3;font-size:16px;line-height:1;flex:0 0 auto}
   .lsrv .sx:hover{background:rgba(255,255,255,.12);color:#fff}
 
+  /* ---- right-click context menu (parity with Emby's own card menu) ---- */
+  #ctx{position:fixed;z-index:200;min-width:222px;max-width:280px;background:var(--ink-3);border:1px solid var(--line-2);border-radius:13px;padding:6px;
+       box-shadow:0 26px 64px -20px #000,0 0 0 1px rgba(0,0,0,.35);display:none}
+  #ctx.open{display:block;animation:pop .14s var(--ease-out)}
+  #ctx .chead{padding:7px 11px 7px;font-size:11.5px;color:var(--fg-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #ctx .ci{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:9px;font-size:13.5px;cursor:pointer;white-space:nowrap;color:var(--fg)}
+  #ctx .ci:hover{background:var(--hover)}
+  #ctx .ci.danger{color:var(--hot)}
+  #ctx .ci.busy{opacity:.5;pointer-events:none}
+  #ctx .ci .k{width:17px;text-align:center;opacity:.8;font-size:13px;flex:0 0 auto}
+  #ctx .ci .on{margin-left:auto;color:var(--good);font-size:12px}
+  #ctx .sep{height:1px;background:var(--line);margin:5px 9px}
+  #ctx .grp{padding:9px 11px 4px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700}
+
+  /* ---- admin dashboard ---- */
+  .adm{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;padding:22px 48px 80px;align-items:start}
+  .acard{background:var(--ink-2);border:1px solid var(--line);border-radius:16px;padding:16px 18px 14px}
+  .acard.wide{grid-column:1/-1}
+  .ahead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .ahead h3{font-size:14.5px;font-weight:700;margin:0}
+  .ahead .cnt{font-size:12px;color:var(--fg-mute);font-variant-numeric:tabular-nums}
+  .ahead .sp{flex:1}
+  .abtn{font-size:12px;font-weight:600;padding:6px 11px;border-radius:8px;background:var(--surface);border:1px solid var(--line);color:var(--fg-dim);cursor:pointer;white-space:nowrap}
+  .abtn:hover{color:var(--fg);border-color:var(--line-2)}
+  .abtn.danger{color:var(--hot)}
+  .arow{display:flex;align-items:center;gap:10px;padding:9px 2px;border-top:1px solid var(--line);font-size:13px}
+  .arow:first-of-type{border-top:0}
+  .arow .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .arow .sub{font-size:11.5px;color:var(--fg-mute);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .arow .grow{min-width:0;flex:1}
+  .astat{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:10px}
+  .astat div{background:var(--surface);border-radius:11px;padding:11px 12px}
+  .astat b{display:block;font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+  .astat span{font-size:11.5px;color:var(--fg-mute)}
+  .akv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px}
+  .akv dt{color:var(--fg-mute)}.akv dd{margin:0;overflow-wrap:anywhere}
+  .atag{font-size:10.5px;font-weight:700;border-radius:5px;padding:2px 7px;background:var(--surface-2);color:var(--fg-dim);white-space:nowrap}
+  .atag.ok{background:rgba(52,199,89,.16);color:#6ee08c}
+  .atag.hot{background:rgba(255,107,122,.16);color:var(--hot)}
+  .ablocked{font-size:12.5px;color:var(--fg-mute);line-height:1.6}
+  .ablocked b{color:var(--hot);font-weight:600}
+  .alog{max-height:260px;overflow:auto}
+
+  /* ---- metadata / identify dialog ---- */
+  #dlg{position:fixed;inset:0;z-index:180;display:none;place-items:center;background:rgba(6,8,12,.66);backdrop-filter:blur(6px);padding:24px}
+  #dlg.open{display:grid}
+  .dlgbox{width:min(620px,94vw);max-height:86vh;overflow:auto;background:var(--ink-2);border:1px solid var(--line);border-radius:18px;padding:22px 24px;box-shadow:0 40px 100px -30px #000;animation:pop .22s var(--ease)}
+  .dlgbox h3{margin:0 0 4px;font-size:18px}
+  .dlgbox .dsub{font-size:12.5px;color:var(--fg-mute);margin-bottom:16px}
+  .fld{margin-bottom:12px}
+  .fld label{display:block;font-size:11.5px;color:var(--fg-mute);font-weight:600;margin-bottom:5px}
+  .fld input,.fld textarea,.fld select{width:100%;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;color:var(--fg);font:inherit;font-size:13.5px;outline:0}
+  .fld input:focus,.fld textarea:focus{border-color:var(--line-2)}
+  .fld textarea{min-height:96px;resize:vertical;line-height:1.55}
+  .dlgfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+  .hit{display:flex;gap:12px;padding:10px;border-radius:12px;cursor:pointer;border:1px solid transparent}
+  .hit:hover{background:var(--hover);border-color:var(--line)}
+  .hit img{width:52px;height:78px;object-fit:cover;border-radius:7px;background:var(--ink-3);flex:0 0 auto}
+  .hit .hn{font-size:14px;font-weight:600}
+  .hit .hs{font-size:12px;color:var(--fg-mute);margin-top:3px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);z-index:120;background:var(--ink-3);border:1px solid var(--line);border-radius:12px;padding:12px 20px;font-size:14px;box-shadow:0 20px 50px -20px #000;opacity:0;pointer-events:none;transition:.3s}
   #toast.show{opacity:1;transform:translateX(-50%)}
   #toast.err{border-color:#5a2a34;color:#ffc9d0}
@@ -260,6 +330,7 @@
     <div class="brand" id="brandBtn"><img src="./icon.png" alt="LinWeb"></div>
     <button class="navbtn on" data-view="home" title="首页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></button>
     <button class="navbtn" data-view="library" title="媒体库"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+    <button class="navbtn" data-view="admin" id="adminBtn" title="服务器管理" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></button>
     <div class="rail-sp"></div>
     <button class="navbtn" id="themeBtn" title="切换深浅"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></button>
     <div class="avatar" id="avatarBtn" title="账户 / 退出"></div>
@@ -300,8 +371,19 @@
       <div class="page-head"><h1 class="page-title" id="searchHead">搜索</h1></div>
       <div class="grid" id="searchGrid"></div>
     </div>
+
+    <div class="view-pane" id="v-admin">
+      <div class="page-head"><h1 class="page-title">服务器管理 <span class="cnt" id="admWho"></span></h1></div>
+      <div class="adm" id="admGrid"></div>
+    </div>
   </main>
 </div>
+
+<!-- right-click menu -->
+<div id="ctx"></div>
+
+<!-- metadata / identify dialog -->
+<div id="dlg"><div class="dlgbox" id="dlgBox"></div></div>
 
 <!-- detail -->
 <div id="detail">
@@ -342,15 +424,21 @@ const yearOf = it => it.ProductionYear || (it.PremiereDate||'').slice(0,4);
 const ratingOf = it => it.CommunityRating ? it.CommunityRating.toFixed(1) : null;
 
 // ---------- cards ----------
-const posterCard = it => `<div class="card" data-open="${it.Id}"><div class="poster" style="${posterBg(it)}">${progressOf(it)>0?`<div class="pw"><i style="width:${progressOf(it)*100}%"></i></div>`:''}</div>
+// Every list that renders leaves its items behind: the right-click menu needs
+// the whole object (UserData, CanDelete, MediaSources), not just the id sitting
+// in the DOM. keepAll() is called wherever a list reaches the renderer.
+const CACHE = new Map();
+const keep = it => { if (it?.Id) CACHE.set(it.Id, it); return it; };
+const keepAll = list => { (list || []).forEach(keep); return list || []; };
+const posterCard = it => `<div class="card" data-open="${it.Id}"><div class="poster" style="${posterBg(it)}"><button class="cmore" tabindex="-1" aria-label="更多操作">⋯</button>${progressOf(it)>0?`<div class="pw"><i style="width:${progressOf(it)*100}%"></i></div>`:''}</div>
   <div class="ctitle">${it.Name}</div><div class="csub num">${[yearOf(it), ratingOf(it)?'★'+ratingOf(it):''].filter(Boolean).join(' · ')}</div></div>`;
 const landCard = it => { const ep = it.Type === 'Episode'; const title = ep ? (it.SeriesName||it.Name) : it.Name;
   const sub = ep ? `S${it.ParentIndexNumber||1}:E${it.IndexNumber||1} · ${it.Name}` : (yearOf(it)+(it.Genres?.[0]?' · '+it.Genres[0]:''));
-  return `<div class="card land" data-resume="${it.Id}"><div class="poster" style="${thumbBg(it)}"><div class="pw"><i style="width:${progressOf(it)*100}%"></i></div></div>
+  return `<div class="card land" data-resume="${it.Id}"><div class="poster" style="${thumbBg(it)}"><button class="cmore" tabindex="-1" aria-label="更多操作">⋯</button><div class="pw"><i style="width:${progressOf(it)*100}%"></i></div></div>
   <div class="ctitle">${title}</div><div class="csub">${sub}</div></div>`; };
-const gcell = it => `<div class="gcell" data-open="${it.Id}"><div class="poster" style="${posterBg(it)}">${progressOf(it)>0?`<div class="pw"><i style="width:${progressOf(it)*100}%"></i></div>`:''}</div>
+const gcell = it => `<div class="gcell" data-open="${it.Id}"><div class="poster" style="${posterBg(it)}"><button class="cmore" tabindex="-1" aria-label="更多操作">⋯</button>${progressOf(it)>0?`<div class="pw"><i style="width:${progressOf(it)*100}%"></i></div>`:''}</div>
   <div class="gt">${it.Name}</div><div class="gs num">${[yearOf(it), it.Type==='Series'?'剧集':'', ratingOf(it)?'★'+ratingOf(it):''].filter(Boolean).join(' · ')}</div></div>`;
-const rail = (title, items, land) => items.length ? `<section class="rail"><div class="rail-head"><h2>${title}</h2></div><div class="track">${items.map(land?landCard:posterCard).join('')}</div></section>` : '';
+const rail = (title, items, land) => keepAll(items).length ? `<section class="rail"><div class="rail-head"><h2>${title}</h2></div><div class="track">${items.map(land?landCard:posterCard).join('')}</div></section>` : '';
 
 function bindCards(scope=document){
   scope.querySelectorAll('[data-open]').forEach(el=>el.onclick=()=>openDetail(el.dataset.open));
@@ -395,7 +483,7 @@ async function renderLibraries(){
   crumb('媒体库');
   $('#libLanding').style.display='block'; $('#libDetail').style.display='none';
   if (!views.length) views = await EM.views().catch(()=>[]);
-  $('#libTotal').textContent = `${views.length} 个库`;
+  keepAll(views); $("#libTotal").textContent = `${views.length} 个库`;
   $('#libCards').innerHTML = views.map(v=>`<div class="libcard" data-lib="${v.Id}" style="${backdropBg(v)}">
     <div class="lx"><div class="ln">${v.Name}</div><div class="lc">${collLabel[v.CollectionType]||'库'}</div></div></div>`).join('');
   $('#libCards').querySelectorAll('.libcard').forEach(el=>el.onclick=()=>openLibrary(views.find(v=>v.Id===el.dataset.lib)));
@@ -418,7 +506,7 @@ async function fillLibrary(v, types, genre){
   grid.innerHTML = Array.from({length:14}).map(()=>`<div class="gcell sk"><div class="poster"></div></div>`).join('');
   try {
     const items = await EM.items({ parentId: v.Id, types, recursive: !!types, sortBy: 'SortName', genre: genre!=='全部'?genre:null, limit: 120 });
-    grid.innerHTML = items.length ? items.map(gcell).join('') : '<div class="empty">该分类下暂无内容。</div>';
+    grid.innerHTML = keepAll(items).length ? items.map(gcell).join('') : '<div class="empty">该分类下暂无内容。</div>';
     bindCards(grid);
   } catch (e) { grid.innerHTML=''; fail(e); }
 }
@@ -432,7 +520,7 @@ async function runSearch(q){
   $('#searchHead').textContent = q ? `搜索 “${q}”` : '搜索';
   const grid = $('#searchGrid');
   if (!q) { grid.innerHTML='<div class="empty">输入关键字搜索影片、剧集、演员。</div>'; return; }
-  try { const items = (await EM.search(q)).filter(i=>i.Type!=='Person'); grid.innerHTML = items.length ? items.map(gcell).join('') : '<div class="empty">无匹配结果。</div>'; bindCards(grid); }
+  try { const items = (await EM.search(q)).filter(i=>i.Type!=='Person'); grid.innerHTML = keepAll(items).length ? items.map(gcell).join('') : '<div class="empty">无匹配结果。</div>'; bindCards(grid); }
   catch (e) { fail(e); }
 }
 
@@ -441,8 +529,8 @@ async function openDetail(id){
   const D = $('#detail'); D.classList.add('open'); $('#dBody').innerHTML=''; $('#dHead').innerHTML='';
   $('.dscroll').scrollTop=0;
   try {
-    const it = await EM.item(id);
-    $('#dHeroBg').style.cssText = backdropBg(it);
+    const it = keep(await EM.item(id));
+    $("#dHeroBg").style.cssText = backdropBg(it);
     const isS = it.Type==='Series';
     const q = [it.OfficialRating, it.MediaSources?.[0]?.MediaStreams?.some(s=>s.VideoRange && /HDR|Dolby|PQ|HLG/i.test(s.VideoRange+s.VideoRangeType)) ? 'HDR' : null].filter(Boolean);
     const mstreams = it.MediaSources?.[0]?.MediaStreams || [];
@@ -455,7 +543,8 @@ async function openDetail(id){
         ${ratingOf(it)?`<span class="dot"></span><span class="rating">★ <span class="num">${ratingOf(it)}</span></span>`:''}
         ${q.map(x=>`<span class="q">${x}</span>`).join('')}</div>
       <div class="dactions"><button class="btn play" id="dPlay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg><span>${progressOf(it)>0?'继续观看':'播放'}</span></button>
-        <button class="btn ghost icon" title="收藏">♥</button></div>`;
+        <button class="btn ghost icon" id="dFav" title="收藏">${progressOf(it)>=0 && it.UserData?.IsFavorite ? '♥' : '♡'}</button>
+        <button class="btn ghost icon" id="dMore" title="更多操作">⋯</button></div>`;
     const cast = (it.People||[]).filter(p=>p.Type==='Actor'||!p.Type).slice(0,20)
       .map(p=>`<div class="castc"><div class="cav" style="${personBg(p)}"></div><div class="cn">${p.Name}</div><div class="cr">${p.Role||''}</div></div>`).join('');
     const specs = `<div class="dsec"><h3>规格</h3><div class="infogrid">
@@ -476,12 +565,22 @@ async function openDetail(id){
       $('#dBody').innerHTML = `<div class="dsec"><p class="ov">${it.Overview||''}</p></div>${castSec}${specs}`;
       $('#dPlay').onclick = () => openPreplayFor(it.Id, it);
     }
+    // Same action menu as the right-click, reachable by button (Emby parity, and
+    // the only way in on a touch device).
+    $('#dMore').onclick = e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); openCtx(r.left, r.bottom + 6, CACHE.get(it.Id) || it); };
+    $('#dFav').onclick = async () => {
+      const cur = CACHE.get(it.Id) || it;
+      if (await act(EM.setFavorite(it.Id, !cur.UserData?.IsFavorite), cur.UserData?.IsFavorite?'已取消收藏':'已加入收藏')) {
+        const fresh = await EM.item(it.Id).catch(()=>null);
+        if (fresh) { keep(fresh); $('#dFav').textContent = fresh.UserData?.IsFavorite ? '♥' : '♡'; }
+      }
+    };
   } catch (e) { closeDetail(); fail(e); }
 }
 async function loadEpisodes(series, seasonId){
   const list = $('#eplist'); list.innerHTML = '<div class="empty">载入分集…</div>';
   try {
-    const eps = await EM.episodes(series.Id, seasonId); list._eps = eps;
+    const eps = keepAll(await EM.episodes(series.Id, seasonId)); list._eps = eps;
     list.innerHTML = eps.map(ep=>`<div class="ep" data-ep="${ep.Id}"><div class="epthumb" style="${thumbBg(ep)}"><span class="en num">E${ep.IndexNumber||'?'}</span>${progressOf(ep)>0?`<div class="pw"><i style="width:${progressOf(ep)*100}%"></i></div>`:''}</div>
       <div><div class="et">${ep.Name} ${ep.UserData?.Played?'<span class="watched">✓</span>':''}</div><div class="eo">${ep.Overview||''}</div></div>
       <div class="ert num">${fmtRuntime(ep.RunTimeTicks)}</div></div>`).join('') || '<div class="empty">本季暂无分集。</div>';
@@ -513,7 +612,10 @@ function wireChooser(item){
   })));
 }
 function readChooser(){ const o={}; $('#ppChooser')?.querySelectorAll('.chz').forEach(z=>{ const on=z.querySelector('.chopt.on'); o[z.dataset.k]= on?+on.dataset.v:0; }); return o; }
-async function openPreplayFor(id, known){
+// fromStart = the menu's "从头播放": same chooser, but ignore the resume point.
+let ppFromStart = false;
+async function openPreplayFor(id, known, fromStart){
+  ppFromStart = !!fromStart;
   try {
     const it = known && known.MediaSources ? known : await EM.item(id);
     ppItem = it;
@@ -530,11 +632,11 @@ $('#preplay').onclick = e => { if (e.target.id==='preplay') closePreplay(); };
 $('#ppGo').onclick = async () => {
   const c = readChooser(); PREF = { ver:c.ver||0, aud:c.aud||0, sub:c.sub||0 }; store.set('pref', PREF);
   const it = ppItem; closePreplay();
-  await play(it, c);
+  await play(it, c, ppFromStart);
 };
 
 // ---------- play handoff: resolve a DIRECT url, hand to the real player ----------
-async function play(item, choice){
+async function play(item, choice, fromStart){
   toast('正在解析播放地址…');
   try {
     const pb = await EM.playbackInfo(item.Id);
@@ -549,7 +651,7 @@ async function play(item, choice){
     // the "CORS on playback" bug. Stable URL in, fresh resolve at the fetch.
     const url = EM.streamUrl(item.Id, source);
     const title = item.Type==='Episode' ? `${item.SeriesName||''} S${item.ParentIndexNumber||1}E${item.IndexNumber||1} · ${item.Name}` : item.Name;
-    const startTicks = item.UserData?.PlaybackPositionTicks || 0;
+    const startTicks = fromStart ? 0 : (item.UserData?.PlaybackPositionTicks || 0);
     // Hand off to the dedicated Emby player (play.html). It owns the session
     // lifecycle (start/progress/stopped) so resume works both ways, and it reads
     // the chosen audio + subtitle below so the detail-page picks are honoured --
@@ -592,8 +694,395 @@ async function play(item, choice){
   } catch (e) { fail(e); }
 }
 
+// ---------- right-click menu (parity with Emby's own card menu) ------------
+// Emby's web client answers a right-click on any card with an action menu. Ours
+// covers the same ground and adds the three things a direct-play client can do
+// that Emby's cannot: copy the untouched stream URL, open it in a new tab, and
+// read the real media specs without leaving the page.
+//
+// Two rules learned from probing live servers:
+//   * permission comes from the DATA (item.CanDelete, EM.policy), never from a
+//     guess -- the same account is admin on one server and not on another;
+//   * any call can be missing on a reverse-proxied Emby, so a failure says which
+//     action the server refused instead of dying quietly.
+const CTX = $('#ctx');
+let ctxItem = null;
+let ctxOpenedAt = 0;      // guards against the auto-scroll that a click on ⋯ triggers
+
+function closeCtx(){ CTX.classList.remove('open'); ctxItem = null; }
+
+// One error path for every action, so a 403/404 reads as what it is.
+async function act(promise, okMsg){
+  try { const r = await promise; if (okMsg) toast(okMsg); return r ?? true; }
+  catch (e) {
+    const m = String(e.message || e);
+    if (/ 403 /.test(m)) toast('服务器拒绝：当前账号没有这个权限', true);
+    else if (/ 404 /.test(m)) toast('该服务器没有开放这个接口（可能被反代裁剪）', true);
+    else if (/Failed to fetch|NetworkError/i.test(m)) toast('请求没发出去——跨域或线路不通', true);
+    else toast(m, true);
+    return null;
+  }
+}
+
+const FOLDERS = ['Series','Season','BoxSet','Folder','CollectionFolder','Playlist','MusicAlbum'];
+
+function ctxModel(it){
+  const ud = it.UserData || {};
+  const folder = FOLDERS.includes(it.Type);
+  const resumable = (ud.PlaybackPositionTicks || 0) > 0;
+  // CanDelete rides on the item itself (verified on a live server); the policy
+  // flag is only the fallback for lists fetched without that field.
+  const canDelete = it.CanDelete ?? !!EM.policy?.EnableContentDeletion;
+  const admin = EM.isAdmin;
+  return [
+    !folder && { k:'play', i:'▶', t: resumable ? '继续播放' : '播放' },
+    !folder && resumable && { k:'restart', i:'↺', t:'从头播放' },
+    { k:'detail', i:'▤', t:'查看详情' },
+    { sep:1 },
+    { k:'played', i: ud.Played ? '✓' : '○', t: ud.Played ? '标记为未播放' : '标记为已播放', on: ud.Played },
+    { k:'fav', i: ud.IsFavorite ? '♥' : '♡', t: ud.IsFavorite ? '取消收藏' : '加入收藏', on: ud.IsFavorite },
+    { k:'like', i:'👍', t: ud.Likes === true ? '取消点赞' : '点赞', on: ud.Likes === true },
+    { k:'playlist', i:'≡', t:'添加到播放列表' },
+    { sep:1 },
+    { k:'similar', i:'⁘', t:'更多类似' },
+    { k:'info', i:'ⓘ', t:'媒体信息' },
+    !folder && { k:'copy', i:'⧉', t:'复制直链' },
+    !folder && { k:'newtab', i:'↗', t:'新标签播放' },
+    admin && { sep:1 },
+    admin && { grp:'管理' },
+    admin && { k:'edit', i:'✎', t:'编辑元数据' },
+    admin && { k:'identify', i:'⌕', t:'识别' },
+    admin && { k:'refresh', i:'⟳', t:'刷新元数据' },
+    canDelete && { sep:1 },
+    canDelete && { k:'delete', i:'✕', t:'删除', danger:1 },
+  ].filter(Boolean);
+}
+
+function openCtx(x, y, it){
+  ctxItem = it;
+  CTX.innerHTML = `<div class="chead">${it.Name || ''}</div>` + ctxModel(it).map(r =>
+    r.sep ? '<div class="sep"></div>'
+    : r.grp ? `<div class="grp">${r.grp}</div>`
+    : `<div class="ci${r.danger?' danger':''}" data-k="${r.k}"><span class="k">${r.i}</span><span>${r.t}</span>${r.on?'<span class="on">●</span>':''}</div>`).join('');
+  CTX.classList.add('open');
+  ctxOpenedAt = performance.now();
+  // clamp into the viewport rather than letting the menu run off the edge
+  const b = CTX.getBoundingClientRect();
+  CTX.style.left = Math.max(8, Math.min(x, innerWidth  - b.width  - 8)) + 'px';
+  CTX.style.top  = Math.max(8, Math.min(y, innerHeight - b.height - 8)) + 'px';
+  CTX.querySelectorAll('.ci').forEach(el => el.onclick = () => { const k = el.dataset.k, item = ctxItem; closeCtx(); ctxRun(k, item); });
+}
+
+document.addEventListener('contextmenu', e => {
+  const el = e.target.closest?.('[data-open],[data-resume],[data-ep],[data-lib]');
+  if (!el || !EM) return;
+  const it = CACHE.get(el.dataset.open || el.dataset.resume || el.dataset.ep || el.dataset.lib);
+  if (!it) return;
+  e.preventDefault();
+  openCtx(e.clientX, e.clientY, it);
+});
+// The ⋯ button on a card opens the same menu. Capture phase + stopPropagation so
+// it beats the card's own click (which would open the detail page) -- and so the
+// close-on-outside-click below never sees it. Without this button the menu is
+// unreachable on a touch screen, where there is no right-click at all.
+document.addEventListener('click', e => {
+  const m = e.target.closest?.('.cmore');
+  if (!m || !EM) return;
+  e.preventDefault(); e.stopPropagation();
+  const host = m.closest('[data-open],[data-resume],[data-ep]');
+  const it = CACHE.get(host?.dataset.open || host?.dataset.resume || host?.dataset.ep);
+  if (!it) return;
+  const r = m.getBoundingClientRect();
+  openCtx(r.right - 4, r.bottom + 6, it);
+}, true);
+document.addEventListener('click', e => { if (!CTX.contains(e.target)) closeCtx(); });
+// Scrolling closes the menu (it is position:fixed and would drift off its card),
+// but NOT the scroll the browser itself performs to bring the clicked ⋯ button
+// into view -- that fired immediately after opening and made the button look
+// dead on any card near the edge of a rail. Measured, not guessed: the click
+// rendered the menu and something closed it within 150ms.
+document.addEventListener('scroll', () => { if (performance.now() - ctxOpenedAt > 300) closeCtx(); }, true);
+
+// Re-read one item from the server and repaint whatever list is on screen, so a
+// menu action shows its result immediately instead of after a reload.
+async function refreshItem(id){
+  try { keep(await EM.item(id)); } catch {}
+  const pane = document.querySelector('.view-pane.on')?.id;
+  if (pane === 'v-home') renderHome();
+  else if (pane === 'v-lib' && libCtx) fillLibrary(libCtx, libCtx.CollectionType==='tvshows'?'Series':libCtx.CollectionType==='movies'?'Movie':null, '全部');
+  else if (pane === 'v-search') runSearch($('#topSearch').value.trim());
+}
+
+async function ctxRun(k, it){
+  const ud = it.UserData || {};
+  switch (k) {
+    case 'play':     return openPreplayFor(it.Id, it.MediaSources ? it : null);
+    case 'restart':  return openPreplayFor(it.Id, it.MediaSources ? it : null, true);
+    case 'detail':   return openDetail(it.Id);
+    case 'played':   if (await act(EM.markPlayed(it.Id, !ud.Played), ud.Played?'已标记为未播放':'已标记为已播放')) refreshItem(it.Id); return;
+    case 'fav':      if (await act(EM.setFavorite(it.Id, !ud.IsFavorite), ud.IsFavorite?'已取消收藏':'已加入收藏')) refreshItem(it.Id); return;
+    case 'like':     if (await act(EM.setLike(it.Id, ud.Likes === true ? null : true), '已更新')) refreshItem(it.Id); return;
+    case 'playlist': return playlistDlg(it);
+    case 'similar':  return showSimilar(it);
+    case 'info':     return infoDlg(it);
+    case 'copy':     return copyDirect(it);
+    case 'newtab':   return openNewTab(it);
+    case 'edit':     return editDlg(it);
+    case 'identify': return identifyDlg(it);
+    case 'refresh':  return act(EM.refreshMetadata(it.Id, { replaceAll:false, recursive: FOLDERS.includes(it.Type) }), '已让服务器刷新元数据');
+    case 'delete':
+      if (!confirm(`删除「${it.Name}」？\n这会从磁盘删除文件，不可撤销。`)) return;
+      if (await act(EM.deleteItem(it.Id), '已删除')) { CACHE.delete(it.Id); refreshItem(it.Id); }
+      return;
+  }
+}
+
+// ---------- dialogs --------------------------------------------------------
+const DLG = $('#dlg');
+const openDlg = html => { $('#dlgBox').innerHTML = html; DLG.classList.add('open'); };
+const closeDlg = () => DLG.classList.remove('open');
+DLG.onclick = e => { if (e.target === DLG) closeDlg(); };
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// The specs a direct-play client actually cares about, read off the item we hold.
+async function infoDlg(it){
+  let full = it;
+  if (!full.MediaSources) { const r = await act(EM.item(it.Id)); if (r) full = keep(r); }
+  const src = full.MediaSources?.[0];
+  const streams = src?.MediaStreams || [];
+  const row = s => `<div class="arow"><span class="atag">${s.Type}</span><div class="grow"><div class="nm">${esc(s.DisplayTitle || s.Codec || '')}</div>
+    <div class="sub">${[s.Codec?.toUpperCase(), s.Width?`${s.Width}×${s.Height}`:'', s.BitDepth?s.BitDepth+'-bit':'', s.VideoRange, s.Language, s.ChannelLayout, s.BitRate?Math.round(s.BitRate/1000)+' kbps':'', s.IsExternal?'外挂':''].filter(Boolean).join(' · ')}</div></div></div>`;
+  openDlg(`<h3>媒体信息</h3><div class="dsub">${esc(full.Name || '')}</div>
+    <dl class="akv">
+      <dt>容器</dt><dd>${esc(src?.Container?.toUpperCase() || '—')}</dd>
+      <dt>大小</dt><dd>${src?.Size ? (src.Size/2**30).toFixed(2)+' GB' : '—'}</dd>
+      <dt>时长</dt><dd>${fmtRuntime(full.RunTimeTicks) || '—'}</dd>
+      <dt>总码率</dt><dd>${src?.Bitrate ? Math.round(src.Bitrate/1000)+' kbps' : '—'}</dd>
+      <dt>路径</dt><dd>${esc(src?.Path || full.Path || '—')}</dd>
+      <dt>条目 ID</dt><dd>${esc(full.Id)}</dd>
+    </dl>
+    <div style="margin-top:14px">${streams.map(row).join('') || '<div class="ablocked">没有轨道信息。</div>'}</div>
+    <div class="dlgfoot"><button class="btn ghost sm" data-close>关闭</button></div>`);
+  $('#dlgBox').querySelector('[data-close]').onclick = closeDlg;
+}
+
+// The direct stream URL, resolved the same way playback does.
+async function directUrl(it){
+  const pb = await EM.playbackInfo(it.Id);
+  return EM.streamUrl(it.Id, pb.source);
+}
+async function copyDirect(it){
+  const url = await act(directUrl(it));
+  if (!url) return;
+  try { await navigator.clipboard.writeText(url); toast('直链已复制到剪贴板'); }
+  catch { openDlg(`<h3>直链</h3><div class="dsub">浏览器拒绝了剪贴板，手动复制：</div>
+    <div class="fld"><textarea readonly>${esc(url)}</textarea></div>
+    <div class="dlgfoot"><button class="btn ghost sm" data-close>关闭</button></div>`), $('#dlgBox').querySelector('[data-close]').onclick = closeDlg; }
+}
+async function openNewTab(it){
+  const tab = window.open('', '_blank');            // opened synchronously or the popup blocker eats it
+  const url = await act(directUrl(it));
+  if (!url) { tab?.close(); return; }
+  const q = new URLSearchParams({ url, title: it.Name || '播放', id: it.Id });
+  if (it.UserData?.PlaybackPositionTicks) q.set('t', Math.round(ticksToSec(it.UserData.PlaybackPositionTicks)));
+  if (tab) tab.location = `./play.html?${q}`; else location.href = `./play.html?${q}`;
+}
+
+async function showSimilar(it){
+  const list = await act(EM.similar(it.Id, 24));
+  if (!list) return;
+  go('search');
+  $('#searchHead').textContent = `与「${it.Name}」相似`;
+  $('#searchGrid').innerHTML = keepAll(list).length ? list.map(gcell).join('') : '<div class="empty">服务器没有给出相似条目。</div>';
+  bindCards($('#searchGrid'));
+}
+
+async function playlistDlg(it){
+  const lists = await act(EM.playlists());
+  if (lists == null) return;
+  openDlg(`<h3>添加到播放列表</h3><div class="dsub">${esc(it.Name || '')}</div>
+    <div id="plList">${lists.map(p=>`<div class="arow" data-pl="${p.Id}" style="cursor:pointer"><span class="k">≡</span><div class="grow"><div class="nm">${esc(p.Name)}</div><div class="sub">${p.ChildCount ?? 0} 项</div></div></div>`).join('') || '<div class="ablocked">还没有播放列表。</div>'}</div>
+    <div class="fld" style="margin-top:14px"><label>新建播放列表</label><input id="plNew" placeholder="播放列表名称"></div>
+    <div class="dlgfoot"><button class="btn ghost sm" data-close>取消</button><button class="btn play sm" id="plCreate">新建并添加</button></div>`);
+  const box = $('#dlgBox');
+  box.querySelector('[data-close]').onclick = closeDlg;
+  box.querySelectorAll('[data-pl]').forEach(el => el.onclick = async () => {
+    closeDlg(); await act(EM.addToPlaylist(el.dataset.pl, it.Id), '已加入播放列表');
+  });
+  $('#plCreate').onclick = async () => {
+    const name = $('#plNew').value.trim(); if (!name) { $('#plNew').focus(); return; }
+    closeDlg(); await act(EM.createPlaylist(name, it.Id), `已创建「${name}」并添加`);
+  };
+}
+
+// Emby wants the WHOLE item back on save, so edit the object we read.
+async function editDlg(it){
+  const full = await act(EM.item(it.Id));
+  if (!full) return;
+  openDlg(`<h3>编辑元数据</h3><div class="dsub">${esc(full.Name)} · ${full.Type}</div>
+    <div class="fld"><label>标题</label><input id="mName" value="${esc(full.Name)}"></div>
+    <div class="fld"><label>原始标题</label><input id="mOrig" value="${esc(full.OriginalTitle||'')}"></div>
+    <div class="fld"><label>年份</label><input id="mYear" type="number" value="${esc(full.ProductionYear||'')}"></div>
+    <div class="fld"><label>分级</label><input id="mRated" value="${esc(full.OfficialRating||'')}"></div>
+    <div class="fld"><label>类型（逗号分隔）</label><input id="mGenres" value="${esc((full.Genres||[]).join(', '))}"></div>
+    <div class="fld"><label>标签（逗号分隔）</label><input id="mTags" value="${esc((full.Tags||[]).join(', '))}"></div>
+    <div class="fld"><label>简介</label><textarea id="mOv">${esc(full.Overview||'')}</textarea></div>
+    <div class="dlgfoot"><button class="btn ghost sm" data-close>取消</button><button class="btn play sm" id="mSave">保存</button></div>`);
+  $('#dlgBox').querySelector('[data-close]').onclick = closeDlg;
+  $('#mSave').onclick = async () => {
+    const split = v => v.split(',').map(s=>s.trim()).filter(Boolean);
+    const body = { ...full,
+      Name: $('#mName').value.trim(), OriginalTitle: $('#mOrig').value.trim() || null,
+      ProductionYear: Number($('#mYear').value) || null, OfficialRating: $('#mRated').value.trim() || null,
+      Genres: split($('#mGenres').value), Tags: split($('#mTags').value), Overview: $('#mOv').value };
+    closeDlg();
+    if (await act(EM.updateItem(body), '已保存')) refreshItem(it.Id);
+  };
+}
+
+// "Identify": ask the metadata providers, then apply the hit the user picks.
+async function identifyDlg(it){
+  openDlg(`<h3>识别</h3><div class="dsub">${esc(it.Name || '')}</div>
+    <div class="fld"><label>搜索名称</label><input id="idName" value="${esc(it.Name||'')}"></div>
+    <div class="fld"><label>年份（可留空）</label><input id="idYear" type="number" value="${esc(it.ProductionYear||'')}"></div>
+    <div class="dlgfoot"><button class="btn ghost sm" data-close>取消</button><button class="btn play sm" id="idGo">搜索</button></div>
+    <div id="idHits" style="margin-top:14px"></div>`);
+  $('#dlgBox').querySelector('[data-close]').onclick = closeDlg;
+  $('#idGo').onclick = async () => {
+    const type = it.Type === 'Episode' ? 'Episode' : it.Type === 'Series' ? 'Series' : it.Type === 'BoxSet' ? 'BoxSet' : 'Movie';
+    $('#idHits').innerHTML = '<div class="ablocked">搜索中…</div>';
+    const hits = await act(EM.remoteSearch(type, { name: $('#idName').value.trim(), year: Number($('#idYear').value) || null, itemId: it.Id }));
+    if (!hits) { $('#idHits').innerHTML = ''; return; }
+    $('#idHits').innerHTML = hits.length ? hits.map((h,i)=>`<div class="hit" data-i="${i}">
+        <img src="${esc(h.ImageUrl||'')}" alt="" onerror="this.style.visibility='hidden'">
+        <div><div class="hn">${esc(h.Name)} ${h.ProductionYear?`<span style="opacity:.6">(${h.ProductionYear})</span>`:''}</div>
+        <div class="hs">${esc(h.SearchProviderName||'')} ${esc(h.Overview||'')}</div></div></div>`).join('')
+      : '<div class="ablocked">没有搜到候选结果。</div>';
+    $('#idHits').querySelectorAll('.hit').forEach(el => el.onclick = async () => {
+      closeDlg();
+      if (await act(EM.applyRemoteSearch(it.Id, hits[+el.dataset.i]), '已应用，服务器正在刷新元数据')) setTimeout(()=>refreshItem(it.Id), 2500);
+    });
+  };
+}
+
+// ---------- admin dashboard ------------------------------------------------
+// Every card loads on its own and reports its own failure. Measured reason: a
+// reverse-proxied Emby answers /System/Info fine while 404-ing /ScheduledTasks
+// and /Sessions -- one dead branch must not blank the page.
+const admCard = (id, title, extra='') => `<div class="acard" id="${id}"><div class="ahead"><h3>${title}</h3><span class="cnt"></span><span class="sp"></span>${extra}</div><div class="body"><div class="ablocked">读取中…</div></div></div>`;
+// Why a card is empty, in the user's terms. The "Failed to fetch" wording matters:
+// a 404 or 403 from a cross-origin Emby carries no CORS header, so the BROWSER
+// turns it into a network error and the real status never reaches JS. Measured:
+// the same /ScheduledTasks call is a clean 404 from node and an opaque
+// "Failed to fetch" from the page. So that case must name both possibilities
+// instead of blaming the network.
+const blocked = e => {
+  const m = String(e?.message || e);
+  const why = / 403 /.test(m) ? '当前账号没有权限（需要管理员）'
+    : / 404 /.test(m) ? '这台服务器没有开放该接口——常见于被反代裁剪的线路'
+    : /Failed to fetch|NetworkError/i.test(m) ? '接口读不到：该线路没开放这个接口（反代裁剪），或需要管理员权限——失败响应不带 CORS 头，浏览器只能报到这一步'
+    : m;
+  return `<div class="ablocked"><b>不可用</b> · ${esc(why)}</div>`;
+};
+const fill = (id, html, count) => {
+  const c = document.getElementById(id); if (!c) return;
+  c.querySelector('.body').innerHTML = html;
+  if (count != null) c.querySelector('.cnt').textContent = count;
+};
+const load = async (id, fn) => { try { await fn(); } catch (e) { fill(id, blocked(e)); } };
+
+async function renderAdmin(){
+  crumb('服务器管理');
+  $('#admWho').textContent = `${EM.userName || ''} · ${EM.isAdmin ? '管理员' : '普通账号（只读）'}`;
+  $('#admGrid').innerHTML =
+    admCard('aOverview','服务器') + admCard('aLibs','媒体库','<button class="abtn" id="aScanAll">扫描全部</button>')
+    + admCard('aUsers','用户') + admCard('aTasks','计划任务')
+    + admCard('aSessions','活动会话','<button class="abtn" id="aSessRe">刷新</button>')
+    + admCard('aDevices','设备') + admCard('aLog','活动日志','') ;
+  document.getElementById('aLog').classList.add('wide');
+
+  load('aOverview', async () => {
+    const [info, counts] = await Promise.all([EM.systemInfo(), EM.itemCounts().catch(()=>null)]);
+    const stat = (n,l) => n == null ? '' : `<div><b class="num">${n}</b><span>${l}</span></div>`;
+    fill('aOverview', `<dl class="akv">
+        <dt>名称</dt><dd>${esc(info.ServerName||'—')}</dd>
+        <dt>版本</dt><dd>${esc(info.Version||'—')}</dd>
+        <dt>系统</dt><dd>${esc(info.OperatingSystemDisplayName||info.OperatingSystem||'—')}</dd>
+        <dt>待重启</dt><dd>${info.HasPendingRestart?'<span class="atag hot">是</span>':'<span class="atag ok">否</span>'}</dd>
+      </dl>${counts?`<div class="astat" style="margin-top:12px">${stat(counts.MovieCount,'电影')+stat(counts.SeriesCount,'剧集')+stat(counts.EpisodeCount,'分集')+stat(counts.SongCount,'歌曲')}</div>`:''}
+      ${EM.isAdmin && info.CanSelfRestart ? '<div style="margin-top:12px"><button class="abtn danger" id="aRestart">重启服务器</button></div>' : ''}`);
+    const rb = $('#aRestart');
+    if (rb) rb.onclick = async () => { if (confirm('重启 Emby 服务器？所有播放会中断。')) await act(EM.restartServer(), '重启指令已发送'); };
+  });
+
+  load('aLibs', async () => {
+    const libs = await EM.virtualFolders();
+    fill('aLibs', libs.map(l=>`<div class="arow"><span class="atag">${esc(l.CollectionType||'mixed')}</span>
+      <div class="grow"><div class="nm">${esc(l.Name)}</div><div class="sub">${esc((l.Locations||[]).join(' · ')||'—')}</div></div>
+      <button class="abtn" data-scan="${esc(l.ItemId||l.Id||'')}">扫描</button></div>`).join('') || '<div class="ablocked">没有媒体库。</div>', `${libs.length} 个`);
+    document.querySelectorAll('#aLibs [data-scan]').forEach(b => b.onclick = () =>
+      act(EM.refreshMetadata(b.dataset.scan, { recursive:true }), `已开始扫描`));
+  });
+  const scanAll = $('#aScanAll'); if (scanAll) scanAll.onclick = () => act(EM.scanAll(), '已请求扫描全部媒体库');
+
+  load('aUsers', async () => {
+    const users = await EM.allUsers();
+    fill('aUsers', users.map(u=>`<div class="arow">
+      <div class="grow"><div class="nm">${esc(u.Name)} ${u.Policy?.IsAdministrator?'<span class="atag ok">管理员</span>':''} ${u.Policy?.IsDisabled?'<span class="atag hot">已停用</span>':''}</div>
+      <div class="sub">最近活动 ${u.LastActivityDate ? new Date(u.LastActivityDate).toLocaleString() : '—'}</div></div>
+      ${EM.isAdmin && u.Id !== EM.userId ? `<button class="abtn" data-user="${esc(u.Id)}" data-dis="${u.Policy?.IsDisabled?1:0}">${u.Policy?.IsDisabled?'启用':'停用'}</button>`:''}</div>`).join(''), `${users.length} 个`);
+    document.querySelectorAll('#aUsers [data-user]').forEach(b => b.onclick = async () => {
+      const u = users.find(x=>x.Id===b.dataset.user); if (!u) return;
+      const next = { ...(u.Policy||{}), IsDisabled: b.dataset.dis !== '1' };
+      if (await act(EM.setUserPolicy(u.Id, next), '已更新用户')) renderAdmin();
+    });
+  });
+
+  load('aTasks', async () => {
+    const tasks = await EM.tasks();
+    fill('aTasks', tasks.map(t=>`<div class="arow"><div class="grow"><div class="nm">${esc(t.Name)}</div>
+      <div class="sub">${esc(t.State)}${t.CurrentProgressPercentage!=null?` · ${Math.round(t.CurrentProgressPercentage)}%`:''} · 上次 ${t.LastExecutionResult?.Status||'—'}</div></div>
+      <button class="abtn" data-task="${esc(t.Id)}" data-run="${t.State==='Running'?0:1}">${t.State==='Running'?'停止':'运行'}</button></div>`).join(''), `${tasks.length} 个`);
+    document.querySelectorAll('#aTasks [data-task]').forEach(b => b.onclick = async () => {
+      const run = b.dataset.run === '1';
+      if (await act(run ? EM.runTask(b.dataset.task) : EM.stopTask(b.dataset.task), run?'任务已启动':'任务已停止')) setTimeout(renderAdmin, 1200);
+    });
+  });
+
+  load('aSessions', async () => {
+    const ss = await EM.sessions();
+    fill('aSessions', ss.map(s=>`<div class="arow"><div class="grow">
+        <div class="nm">${esc(s.UserName||'—')} <span class="atag">${esc(s.Client||'')}</span></div>
+        <div class="sub">${esc(s.DeviceName||'')} · ${s.NowPlayingItem?('▶ '+esc(s.NowPlayingItem.Name)):'空闲'}${s.RemoteEndPoint?' · '+esc(s.RemoteEndPoint):''}</div></div>
+        ${s.NowPlayingItem?`<button class="abtn danger" data-stop="${esc(s.Id)}">停止</button>`:''}
+        <button class="abtn" data-msg="${esc(s.Id)}">发消息</button></div>`).join('') || '<div class="ablocked">没有活动会话。</div>', `${ss.length} 个`);
+    document.querySelectorAll('#aSessions [data-stop]').forEach(b => b.onclick = () => act(EM.sessionStop(b.dataset.stop), '已发送停止指令'));
+    document.querySelectorAll('#aSessions [data-msg]').forEach(b => b.onclick = () => {
+      const t = prompt('发送到该设备的消息：'); if (t) act(EM.sessionMessage(b.dataset.msg, t), '消息已发送');
+    });
+  });
+  const sre = $('#aSessRe'); if (sre) sre.onclick = renderAdmin;
+
+  load('aDevices', async () => {
+    const ds = await EM.devices();
+    fill('aDevices', ds.map(d=>`<div class="arow"><div class="grow"><div class="nm">${esc(d.Name||d.ReportedDeviceName||'—')}</div>
+      <div class="sub">${esc(d.AppName||'')} ${esc(d.AppVersion||'')} · ${esc(d.LastUserName||'')} · ${d.DateLastActivity?new Date(d.DateLastActivity).toLocaleString():'—'}</div></div>
+      <button class="abtn danger" data-dev="${esc(d.Id)}">移除</button></div>`).join('') || '<div class="ablocked">没有设备记录。</div>', `${ds.length} 个`);
+    document.querySelectorAll('#aDevices [data-dev]').forEach(b => b.onclick = async () => {
+      if (await act(EM.deleteDevice(b.dataset.dev), '设备已移除')) renderAdmin();
+    });
+  });
+
+  load('aLog', async () => {
+    const rows = await EM.activity(30);
+    fill('aLog', `<div class="alog">${rows.map(r=>`<div class="arow"><span class="atag${r.Severity==='Error'?' hot':''}">${esc(r.Severity||'Info')}</span>
+      <div class="grow"><div class="nm">${esc(r.Name)}</div><div class="sub">${esc(r.ShortOverview||r.Overview||'')} · ${r.Date?new Date(r.Date).toLocaleString():''}</div></div></div>`).join('') || '<div class="ablocked">日志为空。</div>'}</div>`, `${rows.length} 条`);
+  });
+}
+
 // ---------- router ----------
-const VIEWS = { home:'v-home', library:'v-lib', search:'v-search' };
+const VIEWS = { home:'v-home', library:'v-lib', search:'v-search', admin:'v-admin' };
 function crumb(...parts){ $('#crumbs').innerHTML = parts.map(p=>`<b>${p}</b>`).join(' <span style="opacity:.5">›</span> '); }
 function go(view){
   document.querySelectorAll('#rail .navbtn').forEach(b=>b.classList.toggle('on', b.dataset.view===view));
@@ -602,11 +1091,12 @@ function go(view){
   if (view==='home') renderHome();
   if (view==='library') renderLibraries();
   if (view==='search') runSearch($('#topSearch').value.trim());
+  if (view==='admin') renderAdmin();
 }
 document.querySelectorAll('#rail .navbtn[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
 $('#brandBtn').onclick = () => go('home');
 $('#view').addEventListener('scroll', ()=> $('#view').classList.toggle('scrolled', $('#view').scrollTop>40));
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePreplay(); closeDetail(); } });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); if (DLG.classList.contains('open')) closeDlg(); else { closePreplay(); closeDetail(); } } });
 
 // ---------- errors ----------
 // A HTTPS page is forbidden by the browser from fetching a http:// origin — the
@@ -621,14 +1111,21 @@ function connErr(server){
     ? '混合内容被拦截:本站是 HTTPS,而 Emby 是 http://。浏览器禁止 HTTPS 页面读取 http 资源——这不是 CORS,前端无法绕过。解法任选:①把 Emby 地址改用 https(如 8920 端口);②在本机用 http 打开 LinWeb(npm run serve);③给 Emby 套一层 https 反代。'
     : '连不上服务器——跨域(CORS)未放行。在 Emby 后台「设置 → 网络 → 跨域 CORS 来源」把本站地址加进白名单(或填 *);若是自签 https 还需先让证书受信。';
 }
+// 401 and 403 are NOT the same failure and must not share a reaction: 401 means
+// the token died (log out), 403 means this account may not do that (stay put).
+// They were lumped together, so every permission-denied call -- and the admin
+// dashboard is full of them on a non-admin account -- silently logged the user
+// out mid-browse.
 function fail(e){
   console.error(e);
-  let msg;
-  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) msg = connErr(EM?.server || $('#lServer')?.value);
-  else if (/401|403/.test(e.message)) msg = '登录已过期,请重新登录。';
-  else msg = e.message;
+  const m = String(e?.message || e);
+  let msg, expired = false;
+  if (/Failed to fetch|NetworkError|CORS/i.test(m)) msg = connErr(EM?.server || $('#lServer')?.value);
+  else if (/\b401\b/.test(m)) { msg = '登录已过期,请重新登录。'; expired = true; }
+  else if (/\b403\b/.test(m)) msg = '服务器拒绝：当前账号没有这个权限。';
+  else msg = m;
   toast(msg, true);
-  if (/401|403|登录已过期/.test(msg)) { EM?.logout(); showLogin(); }
+  if (expired) { EM?.logout(); showLogin(); }
 }
 
 // ---------- login ----------
@@ -715,6 +1212,11 @@ function enterApp(){
   // Refresh the line list in the background; play.html reads it from the same
   // remembered-server record. Best-effort: a server without the add-on has none.
   EM.syncLines().then(l => { if (l.length) { paintPill(); toastLines(l.length); } }).catch(()=>{});
+  // The admin rail button is gated on the CURRENT policy, re-read from the
+  // server: a restored session can predate the field, and an account can be
+  // promoted or demoted between visits.
+  $('#adminBtn').hidden = !EM.isAdmin;
+  EM.refreshPolicy().then(() => { $('#adminBtn').hidden = !EM.isAdmin; });
 }
 function paintPill(){
   const lines = EM.allLines();
