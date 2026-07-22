@@ -1,7 +1,7 @@
 // Dev server with HTTP Range support. Range is not optional here:
 // the test files are 300MB..21GB and the player seeks by byte offset.
 import { createServer } from 'node:http';
-import { createReadStream, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, statSync, writeFileSync, existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 
 const ROOT = process.argv[2] ?? process.cwd();
@@ -37,12 +37,16 @@ createServer((req, res) => {
     return;
   }
 
-  // '/' REDIRECTS to the player rather than serving it in place. Serving
-  // index.html at '/' makes document.baseURI '/', and the subtitle renderers
-  // resolve their wasm bundles against it -- so every one of them 404s and
-  // subtitles silently never appear. The page must load from the directory it
-  // actually lives in.
-  if (url === '/' || url === '/public') { res.writeHead(302, { Location: '/public/' }).end(); return; }
+  // In the REPO layout the app lives in public/, so '/' redirects there:
+  // serving index.html at '/' would make document.baseURI '/', and the subtitle
+  // renderers resolve their wasm bundles against it -- so every one 404s and
+  // subtitles silently never appear. A built dist/ is already flat (index.html
+  // and vendor/ at the root), where baseURI '/' is correct -- so serve it in
+  // place. Deciding by which layout is on disk keeps `serve dist` from
+  // redirecting to a /public/ that does not exist (a blank 404 on the homepage).
+  if (url === '/' || url === '/public') {
+    if (existsSync(join(ROOT, 'public', 'index.html'))) { res.writeHead(302, { Location: '/public/' }).end(); return; }
+  }
   let path = join(ROOT, normalize(url));
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
 

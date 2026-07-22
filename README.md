@@ -38,6 +38,11 @@ Working:
 - Quota-aware buffering with eviction of already-played media
 - Track compression (`ContentEncodings`): zlib and header stripping
 - Subtitles: effect-heavy ASS with embedded fonts, PGS, and external SRT
+- Emby integration — browse a server, direct-play (zero-transcode) its original
+  bytes, two-way resume, and per-track audio/subtitle pre-selection carried from
+  the detail page into a dedicated player. See `public/emby.html` +
+  `src/emby/client.js`, and **[DEPLOY.md](DEPLOY.md)** for how to host it against
+  a local or remote Emby.
 
 - E-AC3 / AC-3 / DTS / TrueHD, on the `audio-eac3-ffmpeg` branch only:
   decoded with ffmpeg.wasm and re-encoded to Opus so the browser still does
@@ -49,6 +54,24 @@ Not built yet:
 - External ASS scripts. Embedded ones work; an external one has to find its
   fonts on the system, which is a different problem.
 - VobSub and DVB subtitles. Detected and reported, not drawn.
+
+## Deploy
+
+The site is static; any host that serves files with HTTP `Range` support runs
+it. What decides *which* host is the Emby it talks to — a browser will not let
+an **https** page reach an **http** LAN Emby (mixed content), so:
+
+- **Local / http Emby** → self-host LinWeb over http on the same LAN.
+  One command: `npm run deploy` builds `dist/` and serves it on every
+  interface, printing `http://<lan-ip>:8080/emby.html` to open from a phone/TV.
+- **Public / https Emby** → GitHub Pages (CI in `.github/workflows/deploy.yml`,
+  auto-deploys on push to `main`) or Cloudflare Pages / Netlify
+  (build `npm run build`, output `dist`).
+- **Reverse-proxy LinWeb + Emby under one host** → same-origin, which drops both
+  the mixed-content and CORS walls at once.
+
+Every non-same-origin case also needs Emby's CORS enabled. Full walkthrough,
+Caddy/nginx samples, and a troubleshooting table: **[DEPLOY.md](DEPLOY.md)**.
 
 ## Subtitles
 
@@ -203,6 +226,11 @@ window to the foreground.
     src/subs/pgs.js         Matroska PGS packets -> .sup for libpgs
     src/subs/srt.js         SRT -> WebVTT
     src/audio/gain.js       loudness measurement + makeup gain
+    src/emby/client.js      Emby API client: auth, PlaybackInfo, images, resume
+    public/emby.html        Emby browse + detail UI
+    public/play.html        dedicated Emby player (reuses src/player.js)
+    tools/build-site.mjs    flattens public/ + src/ + vendor/ into dist/
+    tools/deploy.mjs        one-command LAN build + serve
     public/perfdiag.html    frame-rate and overlay diagnostics
     public/gaindiag.html    loudness diagnostics
     public/assdiag.html     windowed ASS overlay / decode-liveness diagnostic
@@ -219,6 +247,11 @@ window to the foreground.
     npm install
     node tools/build-vendor.mjs       # bundles JASSUB + libpgs into public/vendor
     npm run serve                     # http://localhost:8080/
+
+Build a deployable site, or one-command LAN deploy (see DEPLOY.md):
+
+    npm run build                     # -> dist/ (build-vendor + build-site)
+    npm run deploy                    # build, then serve dist/ on the LAN
 
 Tests:
 

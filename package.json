@@ -8,7 +8,8 @@
     "serve": "node tools/serve.mjs .",
     "samples": "node tools/make-samples.mjs",
     "build": "node tools/build-vendor.mjs && node tools/build-site.mjs",
-    "test": "node tools/test-demux.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs"
+    "deploy": "node tools/deploy.mjs",
+    "test": "node tools/test-demux.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs && node tools/test-emby.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
