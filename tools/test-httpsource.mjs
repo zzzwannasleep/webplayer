@@ -182,5 +182,46 @@ console.log('=== HttpSource ===');
     await codeOf(async () => resp(206, new Uint8Array([0, 0]), {})), 'NO_SIZE');
 }
 
+// 12) A read that is answered with the wrong bytes must not be handed on as if
+//     it were the right ones. Reported from the field as Firefox's
+//     "ConvertSampleToAVCC": a mid-file read came back with the head of the
+//     file, the demuxer parsed it at the offset it had asked for, timestamps
+//     jumped back to zero and every sample after it decoded as garbage. The
+//     same stream played in Edge, which is exactly why this has to be caught
+//     here rather than left to whichever decoder is stricter.
+{
+  const whole = new Uint8Array(1000).map((_, i) => i & 0xff);
+  const said = [];
+  // A server that ignores Range: 200 plus the entire file, every time.
+  const ignoresRange = async (url, init) => init?.headers?.Range
+    ? resp(200, whole, { 'content-length': '1000' })
+    : resp(200, whole, {});
+  const src = new HttpSource('http://cdn/x', {
+    fetch: async (u, i) => i?.headers?.Range === 'bytes=0-1'
+      ? resp(206, new Uint8Array([0, 1]), { 'content-range': 'bytes 0-1/1000' })   // open probe
+      : ignoresRange(u, i),
+    log: m => said.push(m),
+  });
+  await src.open();
+  const got = await src.read(500, 4);
+  check('ignored Range: length is the slice, not the file', got.length, 4);
+  check('ignored Range: the bytes are the ones asked for', [...got].join(), '244,245,246,247');
+  check('ignored Range: it says so, once', said.length, 1);
+  await src.read(600, 4);
+  check('ignored Range: still once after a second read', said.length, 1);
+
+  // A 206 that serves a different offset than the one requested is the same
+  // failure wearing the right status code.
+  const wrongOffset = new HttpSource('http://cdn/y', {
+    fetch: async (u, i) => i?.headers?.Range === 'bytes=0-1'
+      ? resp(206, new Uint8Array([0, 1]), { 'content-range': 'bytes 0-1/1000' })
+      : resp(206, new Uint8Array([9, 9, 9, 9]), { 'content-range': 'bytes 0-3/1000' }),
+  });
+  await wrongOffset.open();
+  let msg = '(no throw)';
+  try { await wrongOffset.read(500, 4); } catch (e) { msg = e.message; }
+  check('206 at the wrong offset is refused', /Range mismatch/.test(msg), true);
+}
+
 console.log(failures ? `\n${failures} HTTPSOURCE CHECK(S) FAILED` : '\nALL HTTPSOURCE CHECKS PASSED');
 process.exit(failures ? 1 : 0);

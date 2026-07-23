@@ -82,7 +82,8 @@ const EXPIRED = new Set([401, 403, 410]);
 const coded = (code, msg) => Object.assign(new Error(msg), { code });
 
 export class HttpSource {
-  constructor(url, { resolve = null, fetch: fetchImpl = null, size = 0 } = {}) {
+  constructor(url, { resolve = null, fetch: fetchImpl = null, size = 0, log = () => {} } = {}) {
+    this.log = log;
     this.origin = url;        // the URL the user gave; handed to resolve()
     this.url = url;           // the URL actually fetched (a direct link)
     this.resolve = resolve;
@@ -168,7 +169,31 @@ export class HttpSource {
       r = await this._fetch(this.url, { headers: { Range: range } });
     }
     if (!r.ok) throw new Error(`GET range -> ${r.status}`);
-    return new Uint8Array(await r.arrayBuffer());
+    const body = new Uint8Array(await r.arrayBuffer());
+
+    // r.ok covers 200 as well as 206, and a 200 to a Range request means the
+    // header was ignored: this is the WHOLE file, not the slice asked for.
+    // Returning it as though it began at `offset` hands the demuxer the head of
+    // the file while it believes it holds the tail -- timestamps jump back to
+    // zero and every sample decodes as garbage. Firefox then rejects the frames
+    // outright (ConvertSampleToAVCC); Chromium is quieter about it, which is why
+    // the same stream can look fine in one browser and broken in the other.
+    if (r.status === 200) {
+      if (!this._warnedNoRange) {
+        this._warnedNoRange = true;
+        this.log(`${this.name}: 服务器忽略了 Range，每次读取都会拉回整个文件（已就地切片，但会很慢）`, 'warn');
+      }
+      return body.subarray(Math.min(offset, body.length), Math.min(end + 1, body.length));
+    }
+
+    // A 206 can still carry a different range than the one requested -- caches
+    // and CDNs clamp. Content-Range is only readable when CORS exposes it, so
+    // this is a check when it can be made, not a requirement.
+    const served = /bytes\s+(\d+)-/i.exec(r.headers.get('Content-Range') || '');
+    if (served && Number(served[1]) !== offset) {
+      throw new Error(`Range mismatch: asked for byte ${offset}, server served ${served[1]}`);
+    }
+    return body;
   }
 }
 

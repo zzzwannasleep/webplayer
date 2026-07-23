@@ -78,8 +78,8 @@ async function open(input) {
   // input: a URL string, a { url, size } object (size from Emby, so open() need
   // not read a cross-origin Content-Range), or a File/Blob for local playback.
   let source;
-  if (typeof input === 'string') source = await new HttpSource(input).open();
-  else if (input && typeof input.url === 'string') source = await new HttpSource(input.url, { size: input.size }).open();
+  if (typeof input === 'string') source = await new HttpSource(input, { log }).open();
+  else if (input && typeof input.url === 'string') source = await new HttpSource(input.url, { size: input.size, log }).open();
   else source = new FileSource(input);
   // Which container it is comes from the bytes, not the extension or Emby's
   // Container field -- both lie routinely on a .strm-backed item.
