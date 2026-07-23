@@ -20,12 +20,12 @@ const KEEP_BEHIND = 12;           // seconds retained behind the playhead before
 class BufferQueue {
   constructor(sb, video, ms, log) {
     this.sb = sb; this.video = video; this.ms = ms; this.log = log;
-    this.q = []; this.backlog = 0; this.evictions = 0;
+    this.q = []; this.backlog = 0; this.evictions = 0; this.dead = false;
     sb.addEventListener('updateend', () => this._pump());
   }
   push(data) { this.q.push(data); this.backlog += data.length; this._pump(); }
   _pump() {
-    if (!this.q.length || this.sb.updating || this.ms.readyState !== 'open') return;
+    if (this.dead || !this.q.length || this.sb.updating || this.ms.readyState !== 'open') return;
     const data = this.q[0];
     try {
       this.sb.appendBuffer(data);
@@ -33,7 +33,12 @@ class BufferQueue {
     } catch (e) {
       if (e.name === 'QuotaExceededError') { this._evict(); return; }
       this.q.shift(); this.backlog -= data.length;
-      this.log(`append failed (${e.name}): ${e.message}`, 'error');
+      // A SourceBuffer detached from its MediaSource never comes back, and the
+      // detaching is a consequence of the decode error one line above it in the
+      // log. Retrying repeats this message until it has buried the only line
+      // worth reading, so say it once and stop.
+      if (e.name === 'InvalidStateError') { this.dead = true; this.clear(); }
+      this.log(`append failed (${e.name}): ${e.message}${this.dead ? ' — 这条 SourceBuffer 已失效，停止投喂（真正的原因在上一行）' : ''}`, 'error');
     }
   }
   _evict() {

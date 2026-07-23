@@ -34,11 +34,15 @@ export function buildRemuxer(track, duration) {
     // hvc1 (not hev1): parameter sets live in the sample entry, out of band.
     const codecString = hevcCodecString(track.codecPrivate, 'hvc1');
     const entry = visualSampleEntry('hvc1', track, colour, [box('hvcC', track.codecPrivate)]);
-    return new TrackRemuxer(track, { kind: 'video', codecString, sampleEntry: entry, duration, colour });
+    return new TrackRemuxer(track, { kind: 'video', codecString, sampleEntry: entry, duration, colour,
+                                     nalLengthSize: (cfg.lengthSizeMinusOne & 3) + 1 });
   }
   if (id === 'V_MPEG4/ISO/AVC') {
     const entry = visualSampleEntry('avc1', track, colour, [box('avcC', track.codecPrivate)]);
-    return new TrackRemuxer(track, { kind: 'video', codecString: avcCodecString(track.codecPrivate), sampleEntry: entry, duration, colour });
+    // avcC byte 4 is lengthSizeMinusOne; 4-byte prefixes are usual but not required.
+    const nalLengthSize = track.codecPrivate?.length > 4 ? (track.codecPrivate[4] & 3) + 1 : 4;
+    return new TrackRemuxer(track, { kind: 'video', codecString: avcCodecString(track.codecPrivate),
+                                     sampleEntry: entry, duration, colour, nalLengthSize });
   }
   if (id === 'V_AV1') {
     const entry = visualSampleEntry('av01', track, colour, [box('av1C', track.codecPrivate)]);

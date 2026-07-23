@@ -105,6 +105,7 @@ async function play({ video, audio, transcode }) {
   for (const track of chosen) {
     if (!track) continue;
     const remuxer = buildRemuxer(track, demuxer.duration);
+    remuxer.warn = m => log(m, 'warn');
     streams.push({ track, remuxer });
     send('init', { track: track.number, mime: remuxer.mime, data: remuxer.initSegment() });
   }

@@ -5,6 +5,7 @@ import { openSync, readSync, statSync, closeSync, writeFileSync, mkdirSync } fro
 import { execFileSync } from 'node:child_process';
 import { MatroskaDemuxer, TRACK_VIDEO, TRACK_AUDIO } from '../src/demux/matroska.js';
 import { buildRemuxer } from '../src/remux/tracks.js';
+import { TrackRemuxer } from '../src/remux/mp4.js';
 import { colourFromTrack, parseHvcC, scanAccessUnit } from '../src/demux/hevc.js';
 
 class NodeSource {
@@ -156,6 +157,56 @@ for (const [file, exp] of Object.entries(FILES)) {
     }
   }
   src.close();
+}
+
+// --- the NAL length-prefix detector ----------------------------------------
+// Reported from the field as Firefox's "MediaResult ... ConvertSampleToAVCC",
+// a Gecko-internal name that names neither the frame nor the byte. The remuxer
+// now walks the chain itself and says which sample broke. A detector nobody has
+// seen fire is a detector nobody should trust, so it is fired here on purpose.
+{
+  console.log('\n=== NAL length chain detector ===');
+  const mk = () => {
+    const r = new TrackRemuxer({ video: { width: 2, height: 2 } },
+      { kind: 'video', codecString: 'avc1', nalLengthSize: 4 });
+    const said = []; r.warn = m => said.push(m);
+    return { r, said };
+  };
+  // `claims` is what the prefix says; `carries` is what actually follows it.
+  const nal = (claims, carries = claims) => {
+    const b = new Uint8Array(4 + carries);
+    new DataView(b.buffer).setUint32(0, claims);
+    return b;
+  };
+  const cat = (...a) => {
+    const o = new Uint8Array(a.reduce((n, x) => n + x.length, 0));
+    let p = 0; for (const x of a) { o.set(x, p); p += x.length; }
+    return o;
+  };
+
+  let s = mk();
+  s.r.push({ time: 0, data: cat(nal(10), nal(20)), keyframe: true });
+  check('a clean two-NAL sample says nothing', s.said.length, 0);
+
+  s = mk();
+  s.r.push({ time: 1.5, data: cat(nal(10), nal(999, 10)), keyframe: true });
+  check('an overrunning prefix is reported', s.said.length === 1 && /overruns/.test(s.said[0]), true);
+  check('the report names the timestamp', !!s.said[0]?.includes('1.50s'), true);
+
+  s = mk();
+  s.r.push({ time: 0, data: cat(nal(10), nal(999, 10)), keyframe: true });
+  s.r.push({ time: 1, data: cat(nal(10), nal(999, 10)), keyframe: true });
+  check('it reports once, not once per frame', s.said.length, 1);
+
+  s = mk();
+  s.r.push({ time: 0, data: cat(nal(10), new Uint8Array(2)), keyframe: true });
+  check('a trailing stub too short to be a prefix is reported', s.said.length, 1);
+
+  // AV1 and VP9 carry no length chain; walking one would report every frame.
+  const av1 = new TrackRemuxer({ video: {} }, { kind: 'video', codecString: 'av01' });
+  const quiet = []; av1.warn = m => quiet.push(m);
+  av1.push({ time: 0, data: new Uint8Array([1, 2, 3]), keyframe: true });
+  check('codecs without a NAL chain are left alone', quiet.length, 0);
 }
 
 console.log(`\n${failures === 0 ? 'ALL REMUX CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

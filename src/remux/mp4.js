@@ -248,6 +248,11 @@ export class TrackRemuxer {
     this.pending = [];
     this.baseTime = null;
     this.defaultDuration = track.defaultDuration ? track.defaultDuration / 1e9 : 0;
+    // Set only for the length-prefixed codecs (AVC/HEVC). AV1 and VP9 carry no
+    // such chain, so there is nothing to walk and nothing to check.
+    this.nalLengthSize = opts.nalLengthSize || 0;
+    this.warn = null;            // the worker hangs its log() here
+    this._nalWarned = false;
   }
 
   initSegment() {
@@ -259,7 +264,36 @@ export class TrackRemuxer {
 
   push(block) {
     if (this.baseTime === null) this.baseTime = block.time;
+    if (this.nalLengthSize && !this._nalWarned) this._checkNalChain(block);
     this.pending.push(block);
+  }
+
+  /**
+   * Walk the AVCC/HVCC length prefixes the way a decoder does, and say so if
+   * they do not land exactly on the end of the sample.
+   *
+   * This is the same walk Firefox performs in H264ChangeMonitor, where a break
+   * surfaces as "MediaResult ... ConvertSampleToAVCC" -- a Gecko-internal name
+   * that says nothing about which frame or which byte. Chromium is quieter
+   * about it, which is worse: the file plays there and the fault only shows up
+   * on someone else's machine. The walk is per-NAL, not per-byte, so it costs a
+   * handful of additions per frame; it reports once and changes nothing, because
+   * dropping the sample would be a guess until a real file proves it necessary.
+   */
+  _checkNalChain(block) {
+    const d = block.data, n = this.nalLengthSize;
+    let p = 0;
+    while (p < d.length) {
+      if (p + n > d.length) break;
+      let len = 0;
+      for (let i = 0; i < n; i++) len = len * 256 + d[p + i];
+      p += n + len;
+    }
+    if (p === d.length) return;
+    this._nalWarned = true;
+    this.warn?.(`${this.kind} sample at ${block.time.toFixed(2)}s: ${n}-byte NAL length chain `
+      + `overruns to ${p} in a ${d.length}-byte sample. Firefox rejects this as ConvertSampleToAVCC; `
+      + `Chromium may play it anyway. Only the first such sample is reported.`);
   }
 
   get pendingCount() { return this.pending.length; }
