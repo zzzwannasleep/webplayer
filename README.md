@@ -73,6 +73,10 @@ environment:
 然后在 LinWeb 的服务器地址里填 `http://<这台机器的IP>:23685/emby`。此时页面和 Emby
 **同源**——混合内容和 CORS 两道墙一起消失,**Emby 那边一个字都不用改**。
 
+> 群晖 / unraid 图形界面怎么点、和 Emby 写在同一个 compose 里、装完拿什么自检、
+> 怎么更新、怎么挂到已有的 https 反代后面 —— 都在
+> **[DEPLOY.md 的 Docker 教程](DEPLOY.md#a--docker端口-23685)**。
+
 <details>
 <summary>镜像里有什么、怎么再瘦一半,以及三个容易踩的地方</summary>
 
