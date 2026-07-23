@@ -46,7 +46,7 @@ npm run deploy     # 在局域网起服务,打印手机能打开的地址
 
 ```bash
 docker run -d --name linweb --restart unless-stopped \
-  -p 23685:23685 <你的DockerHub用户名>/linweb
+  -p 23685:23685 zzzwannasleep/linweb
 ```
 
 想自己构建也行:
@@ -59,8 +59,8 @@ docker compose up -d
 打开 `http://<这台机器的IP>:23685/emby.html`。换端口改映射即可(`-p 8080:23685`),
 容器内部固定 23685。
 
-镜像是 **nginx alpine-slim + 构建产物,约 53 MB**;跑起来是单个 nginx worker,
-**常驻内存 10 MB 上下**,镜像里没有 Node、没有 npm、没有任何运行时。
+镜像是 nginx alpine-slim + 构建产物:**拉取 18.3 MB,落盘约 53 MB**;跑起来是单个
+nginx worker,**常驻内存 10 MB 上下**,镜像里没有 Node、没有 npm、没有任何运行时。
 
 **想连局域网 http 的 Emby、又懒得配 CORS**,把 Emby 交给容器反代:
 
@@ -76,11 +76,11 @@ environment:
 <details>
 <summary>镜像里有什么、怎么再瘦一半,以及三个容易踩的地方</summary>
 
-**53 MB 里 31 MB 是一个文件**:`vendor/ffmpeg-core.wasm`,给浏览器一律不解的
+**落盘那 53 MB 里,31 MB 是一个文件**:`vendor/ffmpeg-core.wasm`,给浏览器一律不解的
 E-AC3 / AC-3 / DTS / TrueHD 兜底。片库里没有这些音轨的话可以整块扔掉:
 
 ```bash
-docker build --build-arg WITH_FFMPEG=0 -t linweb .    # 镜像降到约 22 MB
+docker build --build-arg WITH_FFMPEG=0 -t linweb .    # 落盘降到约 22 MB
 ```
 
 视频和其他音频编码都由浏览器解,不受影响;真遇到 DTS 音轨时会解码失败而已。
