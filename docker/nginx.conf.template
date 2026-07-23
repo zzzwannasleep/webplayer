@@ -1,0 +1,83 @@
+# Rendered to /etc/nginx/conf.d/default.conf when the container starts, by the
+# official image's own entrypoint (20-envsubst-on-templates.sh).
+#
+# NGINX_ENVSUBST_FILTER (set in the Dockerfile) limits substitution to ${EMBY_*}
+# and ${NGINX_*}. Without that filter envsubst would also eat nginx's own $host,
+# $uri and $is_args -- they look exactly like shell variables, and the result is
+# a config that starts fine and proxies to the wrong place.
+
+# Emby opens a WebSocket for session/now-playing updates. A proxy that drops the
+# Upgrade header does not fail loudly; it becomes a reconnect loop.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # Fixed on purpose. Remap with `-p 8080:23685` -- that is what publishing is
+    # for, and a port that only ever moves outside the container keeps this file
+    # and the healthcheck from drifting apart.
+    listen      23685;
+    listen      [::]:23685;
+    server_name _;
+    root        /usr/share/nginx/html;
+
+    # Nothing in this build carries a content hash, so caching it hard means
+    # users keep running last week's JavaScript. `no-cache` still stores the
+    # file -- it only forces revalidation, and a 304 on the 32 MB wasm costs one
+    # round trip instead of 32 MB.
+    add_header Cache-Control "no-cache" always;
+
+    # Text only. The wasm blobs are already dense, and compressing 32 MB on
+    # every request costs more CPU than the LAN this usually runs on would
+    # ever notice.
+    gzip              on;
+    gzip_min_length   1024;
+    gzip_types        text/css text/javascript application/javascript application/json image/svg+xml;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    error_page 404 /404.html;
+
+    # ---- optional: same-origin Emby reverse proxy -------------------------
+    # Off unless EMBY_UPSTREAM is set. Turning it on is the one configuration
+    # where both walls fall at once: the page and the API share a scheme (no
+    # mixed content) and an origin (no CORS to configure on Emby at all).
+    # Then point LinWeb's server field at  http://<this-host>:23685/emby
+    # The capture deliberately excludes the leading slash, and proxy_pass puts
+    # it back. `proxy_pass $upstream$1` looks equivalent until the URI is bare
+    # /emby: $1 is then empty, proxy_pass has no URI component left, and nginx
+    # falls back to forwarding the ORIGINAL request URI -- so Emby receives
+    # /emby and answers 404. A trailing "/" keeps a URI component present in
+    # every case. `(?:/(.*))?` and not `/?(.*)` so /embything is not ours.
+    location ~ ^/emby(?:/(.*))?$ {
+        set $emby_upstream "${EMBY_UPSTREAM}";
+        if ($emby_upstream = "") {
+            return 503 "EMBY_UPSTREAM is not set on this container; the /emby proxy is off.\n";
+        }
+
+        # Resolved per request, through the container's own DNS. A literal
+        # proxy_pass makes nginx resolve the name while it boots, so an Emby
+        # container that comes up one second later turns this one into a crash
+        # loop -- and the error ("host not found in upstream") reads like a
+        # typo rather than a race.
+        resolver ${NGINX_LOCAL_RESOLVERS} ipv6=off valid=30s;
+        proxy_pass $emby_upstream/$1$is_args$args;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        # Video is the payload here. Buffering a seek response through nginx
+        # adds latency to every scrub and can spool gigabytes to /var/cache.
+        proxy_buffering            off;
+        proxy_max_temp_file_size   0;
+        proxy_read_timeout         3600s;
+        proxy_send_timeout         3600s;
+    }
+}

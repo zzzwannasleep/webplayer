@@ -1,0 +1,32 @@
+services:
+  linweb:
+    # Building from source. To run the image GitHub Actions publishes instead,
+    # delete this whole `build:` block and set image: <namespace>/linweb --
+    # `docker compose up -d` then just pulls.
+    build:
+      context: .
+      # Uncomment to drop ffmpeg.wasm -- 32 MB of the 40 MB build -- if nothing
+      # in your library carries E-AC3 / AC-3 / DTS / TrueHD audio. Everything
+      # else, video included, is decoded by the browser and unaffected.
+      # args:
+      #   WITH_FFMPEG: "0"
+    image: linweb:latest
+    container_name: linweb
+    restart: unless-stopped
+    ports:
+      - "23685:23685"
+
+    # Optional. Set this and LinWeb serves Emby from its own origin under /emby
+    # -- nothing to configure on the Emby side, because nothing is cross-origin
+    # any more and there is no mixed content to block. Then type
+    #   http://<this-host>:23685/emby
+    # into LinWeb's server field.
+    #
+    # Leave it unset and the browser talks to Emby directly, which works as long
+    # as page and server agree on the scheme (both http, or both https).
+    # environment:
+    #   EMBY_UPSTREAM: http://192.168.1.10:8096
+
+    # One nginx worker serving static files idles around 10 MB. This is a guard
+    # against a runaway, not a target.
+    mem_limit: 128m

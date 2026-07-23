@@ -1,0 +1,24 @@
+# Allowlist, not a blocklist. The repository root holds the test material --
+# several MKVs, one of them 21 GB -- and `docker build` uploads the whole
+# context to the daemon before it reads the first line of the Dockerfile. A
+# forgotten pattern there is not a slow build, it is a build that never starts.
+#
+# It doubles as a secrets fence: *.env and public/_*.html carry live Emby
+# credentials, and nothing here can let them into an image by accident.
+*
+
+# Everything the two stages actually read. docker/ belongs here too: the
+# Dockerfile is handed to the daemon separately, but the files it COPYs are not,
+# so leaving it out fails the build at the COPY line rather than at the top.
+!package.json
+!package-lock.json
+!src
+!public
+!tools
+!docker
+
+# ...minus the parts of public/ that must never ship: vendor/ is rebuilt inside
+# the image (40 MB, and a stale local copy would silently win), and _*.html are
+# the throwaway token-seeding pages.
+public/vendor
+public/_*.html

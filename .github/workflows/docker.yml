@@ -1,0 +1,84 @@
+# Builds the container image and publishes it to Docker Hub.
+#
+# Separate from deploy.yml on purpose: that one ships the static site to GitHub
+# Pages and must not be blocked by a registry credential problem, and this one
+# must not be able to break Pages.
+#
+# Needs two repository secrets:
+#   DOCKERHUB_USERNAME  the Docker Hub account name (also the image namespace)
+#   DOCKERHUB_TOKEN     an access token with Read & Write
+name: Publish Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# One publish per ref. A newer push to main supersedes an in-flight one; tag
+# builds are keyed separately so a release never cancels itself.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pure string checks over the Dockerfile and the nginx template -- no npm
+      # install, no media. Cheap enough to run before spending a build on an
+      # image whose config is already known-broken.
+      - name: Check the container config
+        run: node tools/test-docker.mjs
+
+      # Only the runtime stage is built per-architecture (the build stage is
+      # pinned to the runner), so this emulates a COPY, a chmod and a sed.
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/linweb
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=LinWeb
+            org.opencontainers.image.description=Browser player for MKV with HDR / Dolby Vision and soft subtitles. Zero transcoding.
+            org.opencontainers.image.licenses=MIT
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # npm ci pulls ~250 MB; without this every docs typo pays for it again.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Attestations would add an extra "unknown/unknown" platform row to
+          # every tag on Docker Hub, which reads as a broken build to anyone
+          # looking at the tag list.
+          provenance: false
+
+      # Evidence in the log rather than trust: what was actually published, and
+      # for which architectures.
+      - name: Show what was published
+        run: docker buildx imagetools inspect ${{ secrets.DOCKERHUB_USERNAME }}/linweb@${{ steps.build.outputs.digest }}

@@ -1,0 +1,11 @@
+# A Windows checkout gets CRLF by default, and three of these files are read by
+# something that does not tolerate it: /bin/sh sources docker/*.envsh inside the
+# container, where a trailing \r becomes part of the command. The image would
+# build fine and fail at startup with an error naming a command nobody wrote.
+#
+# CI is unaffected either way -- git stores LF -- so this exists entirely for
+# `docker build` run from a Windows working copy.
+*.envsh     text eol=lf
+*.template  text eol=lf
+*.sh        text eol=lf
+Dockerfile  text eol=lf

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Sourced by the nginx image entrypoint before 20-envsubst-on-templates.sh
+# renders default.conf (files run in `sort -V` order, so 05 beats 20).
+#
+# One job: strip a trailing slash. `EMBY_UPSTREAM=http://emby:8096/` renders as
+# `proxy_pass $emby_upstream$1` -> `http://emby:8096//Users/AuthenticateByName`,
+# and Emby answers 404 on the doubled slash -- which surfaces in the login box
+# as a wrong-password error, so nobody suspects the trailing slash they typed.
+export EMBY_UPSTREAM="${EMBY_UPSTREAM%/}"
