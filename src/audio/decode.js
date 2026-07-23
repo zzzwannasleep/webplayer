@@ -1,8 +1,14 @@
-// Software audio decoding for the codecs no browser will take.
+// Software audio decoding for the codecs the browser in front of us will not take.
 //
-// E-AC3, AC-3, DTS and TrueHD are all rejected by MSE and by WebCodecs
-// AudioDecoder on this platform (measured -- see public/audio-probe.html), so
-// the only route to the speakers is decoding them ourselves.
+// E-AC3, AC-3, DTS and TrueHD are rejected by MSE and by WebCodecs
+// AudioDecoder on every engine measured (see public/audio-probe.html), so the
+// only route to the speakers is decoding them ourselves.
+//
+// MP3 is here for a different reason: Chromium accepts mp4a.6B and Firefox
+// refuses it (measured by tools/probe-firefox.mjs), so the same rip plays with
+// sound in one browser and silent in the other. Which codecs need this table
+// is a per-browser fact, not a per-codec one -- the gate in Player.play() is
+// isTypeSupported, and this table only says what to do when it says no.
 //
 // The decoded PCM does NOT go to WebAudio. It is re-encoded to Opus with the
 // browser's own AudioEncoder and appended to a normal SourceBuffer, so the
@@ -19,6 +25,10 @@
 /** Matroska codec id -> the raw format name ffmpeg should be told to expect. */
 export const RAW_FORMATS = {
   A_EAC3: 'eac3', A_AC3: 'ac3', A_DTS: 'dts', A_TRUEHD: 'truehd', A_MLP: 'mlp',
+  // MPEG audio frames are self-framing too (syncword 0xFFE, length derived from
+  // the header), so concatenated blocks form a valid elementary stream exactly
+  // as the AC-3 family does. ffmpeg's "mp3" demuxer reads Layer I/II/III alike.
+  'A_MPEG/L3': 'mp3', 'A_MPEG/L2': 'mp3', 'A_MPEG/L1': 'mp3',
 };
 
 export const OUT_RATE = 48000;

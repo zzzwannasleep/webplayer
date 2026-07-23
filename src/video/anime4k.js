@@ -129,12 +129,32 @@ export class Anime4K {
     this._alive = true;
     device.lost.then(i => { if (this._alive) { this.log(`GPU 设备丢失: ${i.message}`, 'warn'); this.stop(); } });
 
+    // Gecko's WebGPU takes ImageBitmap/canvas as a copy source but not a
+    // <video>; Chromium takes the element directly and that path is a straight
+    // GPU-side copy, so it stays the default and the scratch canvas is only
+    // built after the engine has actually refused. Probing by feature detection
+    // is not possible here -- the refusal is a per-source TypeError, not a
+    // missing method.
+    let bridge = null;
+    const uploadFrame = () => {
+      if (!bridge) {
+        try { device.queue.copyExternalImageToTexture({ source: v }, { texture: input }, [w, h]); return; }
+        catch (e) {
+          bridge = Object.assign(document.createElement('canvas'), { width: w, height: h });
+          bridge = { canvas: bridge, ctx: bridge.getContext('2d', { alpha: false, willReadFrequently: false }) };
+          this.log(`此浏览器的 WebGPU 不接受 <video> 作为纹理源，已改走画布中转（每帧多一次拷贝）: ${e.name}`, 'warn');
+        }
+      }
+      bridge.ctx.drawImage(v, 0, 0, w, h);
+      device.queue.copyExternalImageToTexture({ source: bridge.canvas }, { texture: input }, [w, h]);
+    };
+
     const frame = () => {
       if (!this._alive) return;
       // rVFC only fires when a frame is presentable, so copy whenever the element
       // holds current data -- gating on !paused would leave the input texture
       // empty (black) when the upscaler is switched on while paused.
-      if (v.readyState >= 2) device.queue.copyExternalImageToTexture({ source: v }, { texture: input }, [w, h]);
+      if (v.readyState >= 2) uploadFrame();
       const enc = device.createCommandEncoder();
       pipe.pass(enc);
       const pass = enc.beginRenderPass({

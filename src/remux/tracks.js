@@ -184,7 +184,15 @@ export const AUDIO_NOTES = {
     route: 'Needs a wasm decoder, then re-encoding to Opus for MSE.',
   },
   A_DTS_HD: { name: 'DTS-HD', reason: 'Extension of DTS; no browser decodes it.', route: 'Needs a wasm decoder.' },
+  // Not "unhandled": mp4a.6B is built and Chromium plays it. Firefox refuses
+  // the codec, so the note has to blame the engine rather than the repackager.
+  'A_MPEG/L3': {
+    name: 'MP3',
+    reason: 'This browser rejects mp4a.6B in MSE (Firefox does; Chromium does not).',
+    route: 'Decoded in software and re-encoded to Opus.',
+  },
 };
+AUDIO_NOTES['A_MPEG/L2'] = AUDIO_NOTES['A_MPEG/L1'] = AUDIO_NOTES['A_MPEG/L3'];
 
 /** What is known about an audio track the player cannot hand to MSE. */
 export function audioNote(track, channels) {

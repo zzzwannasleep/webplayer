@@ -38,6 +38,11 @@ shot*.png
 # is not committed.
 dist/
 
+# A whole portable browser, dropped here so tools/test-firefox.mjs has a Gecko
+# to drive. Hundreds of MB of someone else's build -- point FIREFOX at any
+# installed firefox.exe instead.
+FirefoxPortable/
+
 # Local secrets -- Emby server lines / credentials. Never commit.
 *.env
 
