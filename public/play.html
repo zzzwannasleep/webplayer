@@ -190,9 +190,9 @@
           </div>
           <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
           <div class="vspacer"></div>
-          <button class="vbtn" id="dmkBtn" aria-label="弹幕" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
+          <button class="vbtn" id="dmkBtn" aria-label="弹幕" title="弹幕（字幕和倍速在设置里）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
           <div class="menu-wrap">
-            <button class="vbtn" id="gearBtn" aria-label="轨道设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <button class="vbtn" id="gearBtn" aria-label="设置：字幕 · 倍速 · 轨道" title="设置：字幕 · 倍速 · 轨道" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             <div class="menu" id="picks" role="menu" hidden></div>
           </div>
           <button class="vbtn" id="fsBtn" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
@@ -451,6 +451,19 @@ document.head.append(Object.assign(document.createElement('style'), { textConten
 const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
 const label = (x, i) => x.label || `轨道 ${i + 1}`;
 
+const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
+let rate = 1;
+let extOn = false;          // the Emby-served <track> is the subtitle showing
+
+// defaultPlaybackRate as well as playbackRate: the media load algorithm resets
+// the latter to the former, and every track switch reloads the src -- set only
+// playbackRate and the speed silently returns to 1x on the next switch.
+function setRate(v) {
+  rate = Number(v);
+  video.defaultPlaybackRate = video.playbackRate = rate;
+  paintMenu();
+}
+
 // Deliberately built even when `info` is null. The stream failing to load is
 // exactly when a viewer needs the line picker, and an empty menu at that moment
 // leaves them with no way out but the back button.
@@ -487,8 +500,7 @@ function buildGroups() {
     },
     info && !info.native && {
       key: 'track', label: '轨道',
-      value: [info.audio[CHOICE.audio] && label(info.audio[CHOICE.audio], CHOICE.audio),
-              CHOICE.sub >= 0 ? label(info.subtitles[CHOICE.sub], CHOICE.sub) : '无字幕'].filter(Boolean).join(' · '),
+      value: info.audio[CHOICE.audio] ? label(info.audio[CHOICE.audio], CHOICE.audio) : '',
       rows: [
         info.video.length > 1 && { type: 'select', id: 'video', label: '视频', value: CHOICE.video,
           options: info.video.map((x, i) => ({ value: i, label: label(x, i) + (x.supported ? '' : ' ✕ 无法播放'), disabled: !x.supported })),
@@ -496,13 +508,16 @@ function buildGroups() {
         info.audio.length && { type: 'select', id: 'audio', label: '音频', value: CHOICE.audio,
           options: info.audio.map((x, i) => ({ value: i, label: label(x, i) + (x.supported ? '' : ` — ${x.note?.name || '软解'}`) })),
           onChange: v => { CHOICE.audio = Number(v); start(); } },
-        { type: 'select', id: 'sub', label: '字幕', value: CHOICE.sub,
-          options: [{ value: -1, label: '关闭' }, ...info.subtitles.map((x, i) => {
-            const ok = Subtitles.SUPPORTED.has(x.format);
-            return { value: i, label: label(x, i) + (ok ? '' : ' ✕ 无渲染器'), disabled: !ok };
-          })],
-          onChange: v => applySubtitle(Number(v)) },
       ].filter(Boolean),
+    },
+    subtitleGroup(),
+    {
+      key: 'rate', label: '倍速', value: rate === 1 ? '正常' : `${rate}×`,
+      rows: [
+        { type: 'select', id: 'rate', label: '播放速度', value: rate,
+          options: RATES.map(r => ({ value: r, label: r === 1 ? '正常 1×' : `${r}×` })), onChange: setRate },
+        { type: 'note', text: '触屏长按画面可临时 2×，松手即恢复到这里选的速度。' },
+      ],
     },
     danmakuGroup(),
     info && volume.ok && extrasOk() && {
@@ -671,7 +686,15 @@ for (const ev of ['dragenter', 'dragover']) stage.addEventListener(ev, e => { e.
 for (const ev of ['dragleave', 'drop']) stage.addEventListener(ev, e => { if (ev === 'drop') e.preventDefault(); stage.classList.remove('dragging'); });
 stage.addEventListener('drop', e => importFile(e.dataTransfer?.files?.[0]));
 
-$('#dmkBtn').addEventListener('click', () => setDanmaku({ on: !DM.s.on }));
+// With no track loaded there is nothing to toggle, so this pressed as a dead
+// button -- and it is a box with lines of text in it, sitting next to the gear,
+// so a dead press reads as a broken subtitle button. Send that press to the
+// panel that can actually load a track.
+$('#dmkBtn').addEventListener('click', e => {
+  if (DM.layer?.count) return setDanmaku({ on: !DM.s.on });
+  e.stopPropagation();     // else the outside-click handler shuts what we just opened
+  openMenu('dmk');
+});
 
 (async () => {
   try { await loadRenderer(); } catch (e) { return player.log(`弹幕渲染器加载失败: ${e.message}`, 'warn'); }
@@ -716,12 +739,16 @@ function seedChoice() {
 let extTrack = null;
 async function attachEmbySub() {
   // a reload (line switch) keeps the <track> that is already there
-  if (extTrack) { extTrack.track.mode = 'showing'; return; }
+  if (extTrack) { showExtSub(true); return; }
   try {
     const srt = await fetch(WANT.suburl).then(r => { if (!r.ok) throw new Error('字幕 ' + r.status); return r.text(); });
     extTrack = attachSrt(video, srt, { label: WANT.sublabel, language: WANT.sublang || 'und', asDefault: true });
-    video.addEventListener('loadedmetadata', () => { if (extTrack) extTrack.track.mode = 'showing'; });
+    extOn = true;
+    // Re-asserted on every load, but only to whatever the viewer last chose --
+    // forcing 'showing' here put the track back after they turned it off.
+    video.addEventListener('loadedmetadata', () => { if (extTrack) extTrack.track.mode = extOn ? 'showing' : 'disabled'; });
     player.log(`字幕已开启（Emby 提供）: ${WANT.sublabel}`);
+    paintMenu();
   } catch (e) { player.log(`字幕加载失败: ${e.message}`, 'warn'); }
 }
 
@@ -734,6 +761,47 @@ function gainNote() {
 // menu under an open <select> would close it, so only the panel that shows it
 // is refreshed.
 setInterval(() => { if (menu.open === 'gain') paintMenu(); }, 1000);
+
+// Subtitles are a top-level group, not a row inside 轨道. Two reasons, both
+// bugs before: it is the pick a viewer reaches for most and it sat two taps
+// deep behind a group named after something else -- and an Emby-served .srt is
+// a <track> element, not a demuxed track, so it never appeared in that list at
+// all. It could not be switched away from or turned off from inside the player.
+function subtitleGroup() {
+  if (!info && !WANT.suburl) return null;
+  const list = info?.native ? [] : (info?.subtitles || []);
+  const opts = [{ value: -1, label: '关闭' }];
+  if (WANT.suburl) opts.push({ value: 'ext', label: `${WANT.sublabel} · Emby 提供` });
+  for (const [i, x] of list.entries()) {
+    const ok = Subtitles.SUPPORTED.has(x.format);
+    opts.push({ value: i, label: label(x, i) + (ok ? '' : ' ✕ 无渲染器'), disabled: !ok });
+  }
+  const has = opts.length > 1;
+  const now = extOn ? WANT.sublabel
+    : list[CHOICE.sub] ? label(list[CHOICE.sub], CHOICE.sub) : '关闭';
+  return {
+    key: 'sub', label: '字幕', value: has ? now : '无',
+    rows: [has
+      ? { type: 'select', id: 'sub', label: '字幕轨', value: extOn ? 'ext' : CHOICE.sub,
+          options: opts, onChange: selectSub }
+      // Say why it is empty. An absent picker and a picker with nothing in it
+      // look the same from the outside, and only one of them is a bug.
+      : { type: 'note', text: info?.native
+          ? '原生播放通路解不出内嵌字幕轨。可以在 Emby 里选一条字幕，由服务器以 SRT 送过来。'
+          : '这个片源没有解出字幕轨。' }],
+  };
+}
+
+async function selectSub(v) {
+  showExtSub(v === 'ext');
+  await applySubtitle(v === 'ext' ? -1 : Number(v));
+}
+
+/** The Emby <track> lives outside the demuxed list; one owner for its mode. */
+function showExtSub(on) {
+  extOn = on && !!WANT.suburl;
+  if (extTrack) extTrack.track.mode = extOn ? 'showing' : 'disabled';
+}
 
 async function applySubtitle(idx) {
   CHOICE.sub = idx;
@@ -922,6 +990,14 @@ gear.addEventListener('click', e => {
   // Always reopen on the root list, never on whichever panel was last seen.
   if (open) { menu.open = null; paintMenu(); wake(); }
 });
+/** Open the popover straight onto one panel -- used by the danmaku button. */
+function openMenu(key) {
+  picks.hidden = false;
+  gear.setAttribute('aria-expanded', 'true');
+  menu.open = key;
+  paintMenu();
+  wake();
+}
 document.addEventListener('click', e => {
   if (!picks.hidden && !picks.contains(e.target) && e.target !== gear) closeMenu();
 });
