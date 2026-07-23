@@ -12,6 +12,7 @@
 
 import { AssOverlay } from './ass.js';
 import { PgsFeed } from './pgs.js';
+import { TextCues } from './text.js';
 
 export { srtToVtt, attachSrt } from './srt.js';
 
@@ -35,7 +36,7 @@ export class Subtitles {
   }
 
   /** Formats with a renderer wired up. */
-  static SUPPORTED = new Set(['ass', 'ssa', 'pgs']);
+  static SUPPORTED = new Set(['ass', 'ssa', 'pgs', 'srt', 'vtt']);
 
   get current() { return this._index; }
 
@@ -61,7 +62,9 @@ export class Subtitles {
     // backfills the already-buffered region immediately, and both renderers
     // queue what arrives before they finish booting -- but only if there is
     // something for _onPacket to hand the packets to.
-    this.active = format === 'pgs' ? this._startPgs() : this._startAss(entry);
+    this.active = format === 'pgs' ? this._startPgs()
+                : format === 'srt' || format === 'vtt' ? this._startText(entry)
+                : this._startAss(entry);
     this.active.index = index;
     this.active.format = format;
 
@@ -79,6 +82,16 @@ export class Subtitles {
     const renderer = new AssOverlay(this.video, header, fonts,
       { vendor: this.vendor, log: this.log });
     return { renderer, fonts: fonts.length, ready: renderer.ready };
+  }
+
+  /** SRT in an MKV, tx3g/wvtt in an mp4: one cue per packet, no wasm involved. */
+  _startText(entry) {
+    const renderer = new TextCues(this.video, {
+      label: entry.label || entry.format?.toUpperCase() || '字幕',
+      language: entry.track?.language || 'und',
+      log: this.log,
+    });
+    return { renderer, ready: renderer.ready };
   }
 
   _startPgs() {

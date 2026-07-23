@@ -97,6 +97,7 @@
   .b-ok  { background:#14283c; color:#7ab8ff; }
 
   .note { margin-top:9px; font-size:12px; line-height:1.5; color:var(--dim); }
+  .dim { color:var(--dim); }
   .empty { color:var(--faint); font-size:12.5px; }
 
   details.log summary {
@@ -263,6 +264,9 @@ const WANT = {
   t: Number(P.get('t')) || 0,
   aud: P.has('aud') ? Number(P.get('aud')) : 0, audlang: P.get('audlang') || '',
   sub: P.has('sub') ? Number(P.get('sub')) : null, sublang: P.get('sublang') || '',
+  // The URL inside a .strm, when there is one. A candidate, never a promise --
+  // see sources() for the order it is tried in.
+  direct: P.get('direct') || '',
   suburl: P.get('suburl'), sublabel: P.get('sublabel') || '字幕',
   subwarn: P.get('subwarn'),
   // What a danmaku lookup needs. emby.html sends them explicitly; when this page
@@ -290,20 +294,61 @@ let a4kMode = 'off';        // surviving Anime4K choice: 'off' | 'A' | 'B' | 'C'
 const LINES = EM ? EM.allLines() : [];
 let line = EM?.server || '';
 
+// ---- where the bytes come from ------------------------------------------
+// A .strm item can be fetched two ways, and they are not equivalent:
+//
+//   direct  — straight from the URL the .strm holds. No bytes touch Emby, so
+//             the server stops being the bottleneck and pays no egress. But the
+//             remote must send CORS headers, must not gate on Referer/UA, and
+//             its signature must outlive the film.
+//   server  — Emby reads the remote and proxies it. Always same-origin-ish and
+//             always CORS-clean (we already rely on that everywhere else), at
+//             the cost of pushing every byte through the server twice.
+//
+// Direct is tried first and the server is the safety net, so a remote that
+// refuses the browser costs one failed probe rather than a broken playback.
+// `preferDirect` lets a viewer turn it off for the opposite case the ladder
+// cannot detect: a remote the browser CAN reach but only slowly, where the
+// server's fatter pipe wins. Remembered, because that is a property of a
+// deployment, not of one film.
+const PREFER_KEY = 'linweb:preferDirect';
+let preferDirect = localStorage.getItem(PREFER_KEY) !== '0';
+const serverSource = () => (WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+const sources = () => (preferDirect && WANT.direct ? [WANT.direct, serverSource()] : [serverSource()]);
+
 async function load(input) {
   try {
     await subs.destroy();
     anime4k.stop();
     volume.restart();
-    info = await player.load(input);
+    info = await player.loadAny(input);
+    usingDirect = !!WANT.direct && player.openedFrom === WANT.direct;
+    if (WANT.direct) player.log(usingDirect ? '字节来源：直连远程存储（未经服务器中转）' : '字节来源：经 Emby 服务器代理');
     render();
   } catch (e) {
     info = null;
-    $('#phText').innerHTML = explain(e, input);
+    // The LAST candidate, not the first: loadAny() rethrows the last failure, so
+    // that is the URL the message is about (and the one a mixed-content check
+    // has to look at).
+    $('#phText').innerHTML = explain(e, [].concat(input).pop());
     player.log(e.message, 'error');
     console.error(e);
   }
 }
+let usingDirect = false;
+
+// A read that dies AFTER playback started -- the classic being a presigned URL
+// that expired mid-film. The direct candidate is dropped for the rest of the
+// session (re-opening it would only expire again) and the stream is re-opened
+// through the server at the current position, exactly as a line switch does.
+player.onStalled = ({ message, position }) => {
+  if (!usingDirect || switching) return;
+  usingDirect = false;
+  preferDirect = false;                     // this session only; not persisted
+  player.log(`直连中断（${message}）— 改由 Emby 服务器接管，从 ${Math.round(position)}s 继续`, 'warn');
+  armResume(video.currentTime || position);
+  load(sources());
+};
 
 function explain(e, input) {
   // http video URL on a https page = mixed content, blocked before any request.
@@ -312,9 +357,29 @@ function explain(e, input) {
   if (typeof inUrl === 'string' && location.protocol === 'https:' && /^http:\/\//i.test(inUrl))
     return '混合内容被拦截：本页是 HTTPS，视频地址是 http://，浏览器直接禁止读取（不是 CORS）。请让 Emby 走 https，或用 http 打开 LinWeb，或加一层 https 反代。';
   if (/does not support Range/i.test(e.message)) return '服务器未开放 Range 请求，无法 seek。';
-  if (/Failed to fetch|NetworkError|CORS/i.test(e.message)) return '无法读取该地址——跨域需服务器放行 CORS 与 Range；自签 https 还需证书受信。';
+  // The native leg already caught NO_RANGE/NO_SIZE/NOT_MATROSKA, so reaching
+  // here with a fetch failure means the request never completed. For a remote
+  // (.strm) source that has one extra likely cause worth naming: an object-store
+  // signature that has expired answers 403 WITHOUT any CORS header, so the
+  // browser reports it as an ordinary "Failed to fetch" and the real reason --
+  // a dead link, not a misconfigured one -- is invisible from here.
+  if (/Failed to fetch|NetworkError|CORS/i.test(e.message))
+    return '无法读取该地址。可能是：① 服务器未放行 CORS（Access-Control-Allow-Origin），'
+      + '或未把 Range 列入 Access-Control-Allow-Headers；② 直链签名已过期——对象存储在签名失效时返回 403 '
+      + '且不带 CORS 头，浏览器只能报成同一个错；③ 远程源校验 Referer/User-Agent，浏览器无法伪造，'
+      + '这种源只能让 Emby 服务端代理。自签 https 还需证书受信。';
   return e.message;
 }
+
+// The native leg reads no bytes, so everything built on reading them is gone:
+// track choice, client-side ass/pgs, the HDR verdict. Two of them can still
+// survive -- Anime4K needs pixels off the canvas and the gain stage needs
+// createMediaElementSource, and BOTH require the media element to have loaded
+// with valid CORS. player.loadNative() records whether it managed that.
+// Offering either without it would be worse than hiding them: the canvas throws
+// SecurityError, and createMediaElementSource silences the video permanently
+// (it cannot be undone -- see src/audio/gain.js).
+const extrasOk = () => !!info && (!info.native || info.nativeCors);
 
 function render() {
   $('#placeholder').style.display = 'none';
@@ -323,22 +388,28 @@ function render() {
   if (info.hdr) badges.push(`<span class="badge b-hdr">HDR ${info.hdr.transfer}</span>`);
   if (info.dynamicHdr) badges.push(`<span class="badge b-hdr">${info.hdr10plus ? 'HDR10+' : 'HDR Vivid'}</span>`);
   if (info.dolbyVision) badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
-  if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
+  // Native: no demuxer ran, so nothing was measured. Say "unknown" rather than
+  // let the SDR default below assert something nobody checked.
+  if (info.native) badges.push('<span class="badge b-warn">原生播放 · 色彩未探测</span>');
+  else if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
 
   // Same decode read-out as the main page: video is hardware/GPU, exotic audio the
   // browser refuses is our WASM software decoder on the CPU.
   const codec = t => t.track.codecId.split('/').pop();
   const vTrack = info.video.find(v => v.supported) || info.video[0];
   const aTrack = info.audio[0];
-  const decode = vTrack ? `<dt>解码</dt><dd>视频 <b>硬件解码</b> · GPU (${codec(vTrack)})`
-    + (aTrack ? `<br>音频 ${aTrack.supported ? `<b>浏览器原生</b> (${codec(aTrack)})` : `<b>软件解码</b> · CPU (${codec(aTrack)} → Opus)`}` : '')
-    + `</dd>` : '';
+  const decode = info.native
+    ? `<dt>解码</dt><dd>整条流交给<b>浏览器原生解码</b>（未经重封装）`
+      + `<br><span class="dim">${NATIVE_WHY[info.nativeReason] || info.nativeReason}</span></dd>`
+    : vTrack ? `<dt>解码</dt><dd>视频 <b>硬件解码</b> · GPU (${codec(vTrack)})`
+      + (aTrack ? `<br>音频 ${aTrack.supported ? `<b>浏览器原生</b> (${codec(aTrack)})` : `<b>软件解码</b> · CPU (${codec(aTrack)} → Opus)`}` : '')
+      + `</dd>` : '';
 
   $('#meta').innerHTML = `
     <div class="badges">${badges.join('')}</div>
     <dl class="kv">
-      <dt>大小</dt><dd>${fmtBytes(info.size)}</dd>
-      <dt>时长</dt><dd>${fmtTime(info.duration)}</dd>
+      ${info.size ? `<dt>大小</dt><dd>${fmtBytes(info.size)}</dd>` : ''}
+      <dt>时长</dt><dd>${info.duration ? fmtTime(info.duration) : '未知'}</dd>
       ${info.hdr ? `<dt>色彩</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
       ${info.fonts ? `<dt>字体</dt><dd>${info.fonts} 个内嵌</dd>` : ''}
       ${decode}
@@ -348,9 +419,24 @@ function render() {
   seedChoice();
   paintMenu();
 
-  if (info.video.some(v => v.supported)) start();
+  // Native: the element is already loaded and holding the stream; start() would
+  // only re-run a pipeline that does not exist. Everything after the src is the
+  // same either way, so share it.
+  if (info.native || info.video.some(v => v.supported)) start();
   else player.log('没有可播放的视频轨', 'error');
 }
+
+// Why this item fell back, in the viewer's terms. The codes come from
+// src/demux/matroska.js; each one is a different thing to go fix server-side.
+const NATIVE_WHY = {
+  NOT_MATROSKA: '该源不是 Matroska 容器，无法重封装，已直接交给浏览器',
+  UNKNOWN_CONTAINER: '这个容器 MKV / MP4 / MOV / WebM / FLV 都不是，本地无法拆封装，已交给浏览器解码',
+  FRAGMENTED_MP4: '分片 mp4（moof/mvex）：索引不在 moov 里，无法随机读取，已交给浏览器解码',
+  NOT_MP4: 'mp4 结构读不通（可能被截断），已交给浏览器解码',
+  NOT_FLV: 'FLV 结构读不通，已交给浏览器解码',
+  NO_SIZE: '服务器未告知文件总长度，无法随机读取，已直接交给浏览器',
+  NO_RANGE: '服务器不支持 Range 请求，无法随机读取，已直接交给浏览器',
+};
 
 // ---- the settings menu ---------------------------------------------------
 // Every track and every overlay used to add one more <select> to a single
@@ -368,15 +454,37 @@ const label = (x, i) => x.label || `轨道 ${i + 1}`;
 // exactly when a viewer needs the line picker, and an empty menu at that moment
 // leaves them with no way out but the back button.
 function buildGroups() {
-  const a4kOk = info && Anime4K.supported && !info.hdr && !info.dolbyVision;
+  const a4kOk = info && Anime4K.supported && extrasOk() && !info.hdr && !info.dolbyVision;
   const A4K_NAMES = { off: '关闭', A: 'Mode A · 通用', B: 'Mode B · 柔化', C: 'Mode C · 去噪' };
   return [
-    LINES.length > 1 && {
-      key: 'line', label: '线路', value: LINES.find(l => l.url === line)?.name || '',
-      rows: [{ type: 'select', id: 'line', label: '入口域名', value: line,
-        options: LINES.map(l => ({ value: l.url, label: l.name })), onChange: v => switchLine(v) }],
+    (LINES.length > 1 || WANT.direct) && {
+      key: 'line', label: '线路',
+      value: [LINES.length > 1 && LINES.find(l => l.url === line)?.name,
+              WANT.direct && (usingDirect ? '直连' : '经服务器')].filter(Boolean).join(' · '),
+      rows: [
+        LINES.length > 1 && { type: 'select', id: 'line', label: '入口域名', value: line,
+          options: LINES.map(l => ({ value: l.url, label: l.name })), onChange: v => switchLine(v) },
+        // Only offered for a .strm item, because only there is there a second
+        // place the bytes can come from. Switching re-opens the stream at the
+        // current position, the same way an entry-domain switch does.
+        WANT.direct && { type: 'select', id: 'direct', label: '字节来源', value: preferDirect ? '1' : '0',
+          options: [{ value: '1', label: '直连远程存储' }, { value: '0', label: '经 Emby 服务器' }],
+          onChange: v => switchByteSource(v === '1') },
+        WANT.direct && { type: 'note', text: usingDirect
+          ? '正在直连 .strm 指向的地址，服务器不参与传输。若中途签名过期会自动切回服务器。'
+          : '正在经服务器代理。直连需要远程放行 CORS，且不能校验 Referer/UA。' },
+      ].filter(Boolean),
     },
-    info && {
+    // Native playback has no track list to offer -- the browser picked, and
+    // there is no demuxer to switch with. Say so where the picker would be,
+    // otherwise its absence looks like a bug.
+    info?.native && {
+      key: 'native', label: '播放方式', value: info.nativeCors ? '原生' : '原生 · 受限',
+      rows: [{ type: 'note', text: (NATIVE_WHY[info.nativeReason] || '已回退到原生播放。')
+        + '轨道切换、内嵌 ASS/PGS 字幕与 HDR 判定在这条通路上不可用。'
+        + (info.nativeCors ? '' : ' 该源未放行跨域凭证，画面无法读回，超分与增益已一并停用。') }],
+    },
+    info && !info.native && {
       key: 'track', label: '轨道',
       value: [info.audio[CHOICE.audio] && label(info.audio[CHOICE.audio], CHOICE.audio),
               CHOICE.sub >= 0 ? label(info.subtitles[CHOICE.sub], CHOICE.sub) : '无字幕'].filter(Boolean).join(' · '),
@@ -396,7 +504,7 @@ function buildGroups() {
       ].filter(Boolean),
     },
     danmakuGroup(),
-    info && volume.ok && {
+    info && volume.ok && extrasOk() && {
       key: 'gain', label: '响度', value: { 1: '原始', auto: '自动增益' }[CHOICE.gain] || `+${CHOICE.gain}×`,
       rows: [
         { type: 'select', id: 'gain', label: '增益', value: CHOICE.gain,
@@ -590,8 +698,14 @@ function seedChoice() {
   if (WANT.suburl) {
     CHOICE.sub = -1;               // client renderer unused; Emby serves it as a <track>
     attachEmbySub();
-  } else if (WANT.sub != null) {
+  } else if (WANT.sub != null && info.subtitles.length) {
+    // Guarded on length: a native (or unprobed .strm) source has no subtitle
+    // list, and pick() answers 0 for an empty one -- which would then be asked
+    // to render a track that does not exist.
     CHOICE.sub = pick(info.subtitles, WANT.sub, WANT.sublang);
+  } else if (WANT.sub != null) {
+    CHOICE.sub = -1;
+    player.log('该源未解出字幕轨，客户端字幕不可用（可让 Emby 以 SRT 提供）', 'warn');
   }
 }
 
@@ -647,11 +761,11 @@ async function start() {
     const wanted = CHOICE.sub;
     await subs.destroy();
     anime4k.stop();
-    await player.play({ videoIndex: CHOICE.video, audioIndex: CHOICE.audio });
+    await player.play({ videoIndex: CHOICE.video, audioIndex: CHOICE.audio });   // no-op on the native leg
     await volume.resume().catch(() => {});
     await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
-    if (wanted >= 0) await applySubtitle(wanted);
-    if (a4kMode !== 'off' && Anime4K.supported && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
+    if (wanted >= 0 && info.subtitles.length) await applySubtitle(wanted);
+    if (a4kMode !== 'off' && Anime4K.supported && extrasOk() && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
   } catch (e) { player.log(e.message, 'error'); console.error(e); }
 }
 
@@ -674,6 +788,24 @@ armResume(WANT.t);
 // is reloaded at the current playhead. Nothing about the item changes, so the
 // track choices are re-seeded by render() exactly as on first load.
 let switching = false;
+
+// Same item, the other place its bytes live. Only reachable for a .strm; the
+// entry-domain switch below is the model -- remember the playhead, re-open,
+// let render() re-seed the track choices. The preference is persisted because
+// which side is faster is a property of the deployment, not of this film.
+async function switchByteSource(direct) {
+  if (switching || direct === preferDirect) return;
+  switching = true;
+  const at = video.currentTime;
+  try {
+    preferDirect = direct;
+    localStorage.setItem(PREFER_KEY, direct ? '1' : '0');
+    player.log(`字节来源 → ${direct ? '直连远程存储' : '经 Emby 服务器'}`);
+    armResume(at);
+    await load(sources());
+  } finally { switching = false; paintMenu(); }
+}
+
 async function switchLine(to) {
   if (!EM || switching || !to || to === line) return;
   switching = true;
@@ -684,7 +816,7 @@ async function switchLine(to) {
     line = EM.useLine(to);
     player.log(`切换线路 → ${LINES.find(l => l.url === to)?.name || to}`);
     armResume(at);
-    await load(WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+    await load(sources());
   } finally { switching = false; }
 }
 
@@ -838,7 +970,7 @@ video.addEventListener('error', () => {
 });
 
 // ---- go ------------------------------------------------------------------
-if (WANT.url) load(WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+if (WANT.url) load(sources());
 else { $('#phText').textContent = '缺少播放地址，请从媒体库重新进入。'; }
 
 window.player = player;

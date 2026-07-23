@@ -110,11 +110,14 @@ function audioSampleEntry(fourcc, channels, sampleRate, ...codecBoxes) {
 }
 
 /** ESDS descriptor wrapping an AAC AudioSpecificConfig. */
-function esdsBox(asc) {
+function esdsBox(asc, oti = 0x40) {
   const descr = (tag, payload) => concat([bytes(tag, 0x80, 0x80, 0x80, payload.length), payload]);
-  const decoderSpecific = descr(0x05, asc);
+  // MP3 has no DecoderSpecificInfo -- everything a decoder needs is in the
+  // frame headers. Emitting an empty descriptor instead of omitting it is what
+  // makes Chromium reject the track.
+  const decoderSpecific = asc?.length ? descr(0x05, asc) : new Uint8Array(0);
   const decoderConfig = descr(0x04, concat([
-    bytes(0x40, 0x15),                                // objectTypeIndication=AAC, streamType=audio
+    bytes(oti, 0x15),                                 // objectTypeIndication, streamType=audio
     bytes(0, 0, 0),                                   // bufferSizeDB
     u32(0, 0),                                        // maxBitrate, avgBitrate
     decoderSpecific,

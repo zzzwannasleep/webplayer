@@ -71,6 +71,14 @@ export function buildRemuxer(track, duration) {
     const aot = track.codecPrivate?.length ? (track.codecPrivate[0] >> 3) : 2;
     return new TrackRemuxer(track, { kind: 'audio', codecString: `mp4a.40.${aot || 2}`, sampleEntry: entry, duration, sampleRate: rate });
   }
+  if (id === 'A_MPEG/L3') {
+    // MP3 is the audio track on a large slice of older MKV rips and on nearly
+    // every legacy FLV, and it was reported "unhandled" purely because nothing
+    // had written the four lines. objectTypeIndication 0x6b = MPEG-1 Layer 3;
+    // there is no DecoderSpecificInfo, the frame headers carry everything.
+    const entry = audioSampleEntry('mp4a', a.channels, rate, esdsBox(null, 0x6b));
+    return new TrackRemuxer(track, { kind: 'audio', codecString: 'mp4a.6B', sampleEntry: entry, duration, sampleRate: rate });
+  }
   if (id === 'A_FLAC') {
     // dfLa wraps the raw STREAMINFO metadata block Matroska stores in CodecPrivate.
     const streamInfo = stripFlacHeader(track.codecPrivate);

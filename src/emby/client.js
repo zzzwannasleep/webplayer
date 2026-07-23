@@ -80,7 +80,15 @@ const DIRECT_PROFILE = {
   MaxStreamingBitrate: 400_000_000,
   MaxStaticBitrate: 400_000_000,
   DirectPlayProfiles: [
-    { Type: 'Video', Container: 'mkv,webm,mp4,m4v,mov,ts,m2ts', VideoCodec: 'h264,hevc,hev1,vp8,vp9,av1', AudioCodec: 'aac,ac3,eac3,mp3,opus,flac,vorbis,dts,truehd,pcm' },
+    { Type: 'Video', Container: 'mkv,webm,mp4,m4v,mov,flv,ts,m2ts', VideoCodec: 'h264,hevc,hev1,vp8,vp9,av1', AudioCodec: 'aac,ac3,eac3,mp3,opus,flac,vorbis,dts,truehd,pcm' },
+    // A .strm item carries no probed codecs (MediaStreams is empty until the
+    // first play), so a codec-constrained profile has nothing to match against
+    // and the server can decide it must transcode -- which this profile forbids,
+    // leaving "no compatible streams". This entry names the container and
+    // deliberately constrains NO codec, so a remote source is always direct-
+    // playable. NOTE: matched against a live .strm library, this is the one line
+    // here I have not been able to verify end to end.
+    { Type: 'Video', Container: 'strm' },
   ],
   // Deliberately empty: force DirectPlay/DirectStream, never transcode.
   TranscodingProfiles: [],
@@ -91,6 +99,52 @@ const DIRECT_PROFILE = {
     { Format: 'pgssub', Method: 'Embed' }, { Format: 'srt', Method: 'Embed' },
   ],
 };
+
+// ---- remote (.strm-backed) sources -----------------------------------------
+// A .strm is a one-line text file holding a URL; Emby resolves it server-side,
+// so this client never sees the file -- only the SHAPE of the MediaSource it
+// produces, which differs from a local file in three ways that matter:
+//   Container is "strm" or missing  (the real container was never probed)
+//   Size is null                    (nobody asked the remote how long it is)
+//   MediaStreams is []              (Emby only ffprobes a .strm on first play)
+// Everything downstream has to survive all three. See DEPLOY/README for why the
+// stream still comes from Emby rather than the remote URL directly.
+// The URL a .strm actually points at, when a BROWSER stands a chance with it.
+// Emby returns `Path` verbatim to any user who can see the library, so this
+// costs no extra call -- it is the same string the .strm file contains.
+//
+// Only http(s) qualifies. The other things a .strm may legally hold (a UNC
+// share, an absolute local path, rtsp://, mms://) are things a page cannot
+// fetch at all, and offering them as a candidate would just spend a failed
+// request before the server path runs anyway.
+//
+// Returning it is NOT a promise that it works: a browser may still be refused
+// for want of a CORS header, or by a Referer/User-Agent check it cannot satisfy
+// (README, ".strm 与原生兜底"). It is a CANDIDATE -- callers must fall back.
+export function directUrl(source) {
+  if (!isRemoteSource(source)) return null;
+  const p = (source.Path || '').trim();
+  return /^https?:\/\//i.test(p) ? p : null;
+}
+
+export const isRemoteSource = s =>
+  !!s && (s.Protocol === 'Http' || s.IsRemote === true
+          || /^(https?|rtsp|rtmp|mms):\/\//i.test(s.Path || '')
+          || /\.strm$/i.test(s.Path || ''));
+
+// The extension Emby's /Videos/{id}/stream path ends with. Emby keys the served
+// container off it, so "strm" -- which is not a container, it is a pointer file
+// -- must never be sent. Fall back to the extension of the URL inside the .strm,
+// which IS the real container, and to nothing at all when even that is unknown
+// (Emby then picks, and the native <video> leg covers whatever comes out).
+const BAD_CONTAINER = /^(strm|m3u|m3u8|)$/i;
+function containerExt(source) {
+  const c = (source?.Container || '').split(',')[0].trim();
+  if (c && !BAD_CONTAINER.test(c)) return '.' + c;
+  const path = (source?.Path || '').split(/[?#]/)[0];
+  const ext = (path.match(/\.([a-z0-9]{2,5})$/i)?.[1] || '').toLowerCase();
+  return ext && !BAD_CONTAINER.test(ext) ? '.' + ext : '';
+}
 
 export class EmbyClient {
   // `home` is the address the account belongs to and the key everything is
@@ -313,11 +367,10 @@ export class EmbyClient {
   }
   // The untouched original file. Static=true guarantees no server-side remux.
   streamUrl(itemId, source) {
-    const container = source?.Container ? '.' + source.Container.split(',')[0] : '';
     const p = new URLSearchParams({ Static: 'true', mediaSourceId: source?.Id || itemId });
     if (source?.ETag) p.set('Tag', source.ETag);
     if (this.token) p.set('api_key', this.token);
-    return `${this.server}/Videos/${itemId}/stream${container}?${p}`;
+    return `${this.server}/Videos/${itemId}/stream${containerExt(source)}?${p}`;
   }
 
   // Ask the server to extract/convert a subtitle stream to SRT so the browser's

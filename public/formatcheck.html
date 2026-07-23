@@ -1,0 +1,205 @@
+<!doctype html><meta charset="utf-8">
+<title>container matrix</title>
+<!--
+  "Does this player support mainstream video formats?" used to mean MKV, with
+  everything else falling through to <video> and losing the track list. This
+  asserts the answer container by container, in a real browser, because node can
+  prove the demuxers parse but not that MSE accepts what they produce.
+
+  Three things are checked, and the third is the one that matters:
+    1. which LEG each container takes (remux vs native vs neither)
+    2. that a picked File reaches the same leg as the same bytes over http
+    3. that the remux leg actually PLAYS -- frames decoded, playhead moving --
+       and that the tracks and subtitles it demuxed are really usable
+-->
+<style>body{font:13px ui-monospace,monospace;margin:16px}video{width:240px;height:135px}iframe{width:860px;height:520px;border:1px solid #333}</style>
+<pre id="out"></pre>
+<video id="v" muted playsinline></video>
+<script type="module">
+import { Player } from '../src/player.js';
+import { Subtitles } from '../src/subs/index.js';
+
+const out = [];
+let failed = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const send = () => fetch('/collect', { method: 'POST', body: out.join('\n') + '\n' }).catch(() => {});
+// Reported after EVERY line, not just at the end. A browser check that hangs
+// (or blocks the event loop, so the watchdog never fires either) otherwise
+// yields nothing at all, and the one thing worth knowing is where it stopped.
+const note = (line) => { out.push(line); send(); };
+const ok = (n, c, d = '') => { if (!c) failed++; note((c ? 'PASS  ' : 'FAIL  ') + n + (d !== '' ? '  -> ' + d : '')); };
+setTimeout(() => { note('WATCHDOG'); note('1 CHECK(S) FAILED'); }, 200000);
+
+// mse: demuxed here, full feature set. native: the browser demuxed it.
+// fail: neither can, and the error must say which container it was.
+const CASES = [
+  { file: 'video-avc.mkv',   leg: 'mse' },
+  { file: 'native-vp9.webm', leg: 'mse' },
+  { file: 'native-h264.mp4', leg: 'mse' },
+  { file: 'native.mov',      leg: 'mse' },
+  { file: 'native.flv',      leg: 'mse' },
+  { file: 'flv-mp3.flv',     leg: 'mse' },
+  { file: 'nodemux.avi',     leg: 'fail' },
+  { file: 'nodemux.ts',      leg: 'fail' },
+];
+
+const video = document.getElementById('v');
+const player = new Player(video);
+const logs = [];
+player.log = (m) => logs.push(m);
+
+const run = async (input) => {
+  try { const info = await player.load(input); return { leg: info.native ? 'native' : 'mse', info }; }
+  catch (e) { return { leg: 'fail', err: e.message, code: e.code }; }
+};
+
+// The same bytes as a File carries the name and type a picker would give it --
+// the point being that neither leg may depend on there being a URL.
+const asFile = async (name) => {
+  const r = await fetch('/samples/' + name);
+  return new File([await r.blob()], name, { type: r.headers.get('content-type') || '' });
+};
+
+/** Play until frames are on screen and the clock has moved, or give up. */
+async function playing(ms = 6000, audioIndex = 0) {
+  // Bounded on purpose: a play() that never settles used to hang the whole run
+  // and produce no output at all, which says nothing about which file broke.
+  const started = await Promise.race([
+    player.play({ videoIndex: 0, audioIndex }).then(() => true),
+    sleep(20000).then(() => 'play() never settled'),
+  ]).catch(e => e.message);
+  if (started !== true) { note(`      (play failed: ${started}; last log: ${logs.slice(-3).join(' / ')})`); return false; }
+  await video.play().catch(() => {});
+  const t0 = video.currentTime;
+  for (let i = 0; i < ms / 200; i++) {
+    if (video.videoWidth > 0 && video.currentTime > t0) return true;
+    await sleep(200);
+  }
+  return false;
+}
+
+(async () => {
+try {
+  // --- 1) the matrix, both entry points ----------------------------------
+  for (const c of CASES) {
+    const ext = c.file.slice(c.file.lastIndexOf('.'));
+    for (const how of ['url', 'file']) {
+      const input = how === 'url' ? '/samples/' + c.file : await asFile(c.file);
+      const r = await run(input);
+      const tag = `${c.file} (${how})`;
+      ok(`${tag}: takes the ${c.leg} leg`, r.leg === c.leg, r.leg + (r.err ? ` — ${r.err}` : ''));
+      if (r.leg !== c.leg) { await player.dispose(); continue; }
+
+      if (c.leg === 'mse') {
+        ok(`${tag}: has a video track the browser accepts`,
+           r.info.video.some(v => v.supported), r.info.video.map(v => `${v.label}/${v.supported}`).join(' '));
+        ok(`${tag}: plays — frames decoded and the clock moving`, await playing(),
+           `${video.videoWidth}x${video.videoHeight} t=${video.currentTime.toFixed(2)}`);
+      } else {
+        // The old message for these was "not a Matroska file (no EBML header)",
+        // which is true of an .avi and tells whoever opened one nothing.
+        ok(`${tag}: the error names ${ext} instead of blaming EBML`,
+           r.err.includes(ext) && !/EBML/.test(r.err), r.err);
+      }
+      await player.dispose();
+    }
+  }
+
+  // --- 2) an mp4 is now a first-class source, not a fallback --------------
+  {
+    const r = await run('/samples/mp4-multi.mp4');
+    ok('mp4-multi: remuxed, not handed to the browser', r.leg === 'mse', r.leg + (r.err || ''));
+    const i = r.info;
+    ok('mp4-multi: one video track', i.video.length === 1, String(i.video.length));
+    ok('mp4-multi: BOTH audio tracks are offered', i.audio.length === 2,
+       i.audio.map(a => a.label).join(' | '));
+    ok('mp4-multi: the audio languages came out of the file',
+       i.audio.map(a => a.track.language).join(',') === 'eng,jpn', i.audio.map(a => a.track.language).join(','));
+    ok('mp4-multi: MSE accepts every track it demuxed',
+       i.video.every(v => v.supported) && i.audio.every(a => a.supported),
+       [...i.video, ...i.audio].map(x => `${x.mime}=${x.supported}`).join(' '));
+    ok('mp4-multi: the tx3g subtitle track is listed', i.subtitles.length === 1 && i.subtitles[0].format === 'srt',
+       i.subtitles.map(s => s.format).join(','));
+    ok('mp4-multi: plays', await playing(), `${video.videoWidth}x${video.videoHeight}`);
+
+    // Switching to the SECOND audio track is the whole point of demuxing an
+    // mp4 rather than letting <video> pick.
+    const second = await playing(6000, 1);
+    ok('mp4-multi: the second audio track can be selected and streams',
+       second && player.streams.some(s => s.kind === 'audio'),
+       player.streams.map(s => s.mime).join(' '));
+    await player.dispose();
+  }
+
+  // --- 3) HDR judged from the mp4 itself ---------------------------------
+  {
+    const r = await run('/samples/hdr-hevc.mp4');
+    ok('hdr-hevc.mp4: remuxed', r.leg === 'mse', r.leg + (r.err || ''));
+    ok('hdr-hevc.mp4: HDR was measured, not guessed', !!r.info.hdr,
+       r.info.hdr ? `${r.info.hdr.transfer} / ${r.info.hdr.primaries} / ${r.info.hdr.bitDepth}-bit` : 'none');
+    ok('hdr-hevc.mp4: PQ transfer identified', /2084|PQ/i.test(r.info.hdr?.transfer ?? ''), String(r.info.hdr?.transfer));
+    await player.dispose();
+  }
+
+  // --- 4) text subtitles actually reach the screen -----------------------
+  // Demuxing a subtitle track and then dropping it ("no renderer yet") is what
+  // used to happen to EVERY srt track, embedded in an mkv or an mp4 alike.
+  for (const [file, what] of [['subs-srt.mkv', 'SRT in an MKV'], ['mp4-multi.mp4', 'tx3g in an mp4']]) {
+    note(`... ${what}: constructing`);
+    const subs = new Subtitles(player, { log: () => {} });
+    note(`... ${what}: loading`);
+    const r = await run('/samples/' + file);
+    note(`... ${what}: loaded ${r.leg} subs=${r.info?.subtitles.length}`);
+    if (r.leg !== 'mse' || !r.info.subtitles.length) {
+      ok(`${what}: a subtitle track was demuxed`, false, r.leg + ' subs=' + (r.info?.subtitles.length ?? 0));
+      await subs.destroy(); await player.dispose(); continue;
+    }
+    note(`... ${what}: playing`);
+    await playing();
+    note(`... ${what}: selecting`);
+    await subs.select(0);
+    note(`... ${what}: selected`);
+    for (let i = 0; i < 30 && subs.delivered === 0; i++) await sleep(200);
+    ok(`${what}: cues were handed to a renderer`, subs.delivered > 0, `${subs.delivered} cues`);
+
+    const track = [...video.textTracks].find(t => (t.cues?.length ?? 0) > 0);
+    const texts = track ? [...track.cues].map(c => c.text) : [];
+    ok(`${what}: the cues are in a live TextTrack`, !!track && track.mode === 'showing',
+       track ? `${track.cues.length} cues, mode=${track.mode}` : 'no track has cues');
+    ok(`${what}: the text is what the file says`, texts.some(t => /Hello from tx3g/.test(t)),
+       texts.slice(0, 3).join(' | ') || '(none)');
+    // {\an8} must become a cue setting, not literal text on screen.
+    ok(`${what}: ASS override tags were translated, not printed`,
+       texts.every(t => !/\{\\/.test(t)) && texts.some(t => /Second line, raised/.test(t)),
+       texts.find(t => /Second/.test(t)) ?? '(missing)');
+    await subs.destroy();
+    await player.dispose();
+  }
+
+  // --- 5) the whole page, on an mp4 --------------------------------------
+  // The unit checks above hold the Player directly. This is the page a viewer
+  // actually opens: it must render a 轨道 picker for an mp4, which is exactly
+  // what it refused to do while mp4 was a native-only fallback.
+  {
+    const f = document.createElement('iframe');
+    f.src = './index.html?url=' + encodeURIComponent('/samples/mp4-multi.mp4');
+    document.body.append(f);
+    await new Promise(r => { f.onload = r; });
+    const d = f.contentDocument;
+    for (let i = 0; i < 60 && !d.querySelector('#picks .mrow[data-group]'); i++) await sleep(500);
+    d.getElementById('gearBtn').click();
+    const groups = [...d.getElementById('picks').querySelectorAll('.mrow[data-group]')].map(x => x.dataset.group);
+    ok('index.html: an mp4 gets the 轨道 picker, not the 播放方式 note',
+       groups.includes('track') && !groups.includes('native'), groups.join(','));
+    const el = d.querySelector('video');
+    ok('index.html: it is playing through MSE (blob src)', !!el && el.src.startsWith('blob:'),
+       (el?.src || '').slice(0, 40));
+    f.remove();
+  }
+} catch (e) { out.push('ERROR ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]); failed++; }
+
+out.push(failed ? `${failed} CHECK(S) FAILED` : 'ALL BROWSER CHECKS PASSED');
+document.getElementById('out').textContent = out.join('\n');
+send();
+})();
+</script>

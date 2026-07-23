@@ -14,7 +14,7 @@
 // What this cannot synthesise is listed at the bottom, honestly, rather than
 // faked into looking covered.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, statSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 
 const OUT = 'D:/xiaochengxu/webplayer/samples';
 mkdirSync(OUT, { recursive: true });
@@ -106,6 +106,119 @@ run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=30',
      '-c:v', 'libx265', '-preset', 'ultrafast', '-crf', '35', '-tag:v', 'hvc1', '-an',
      '-f', 'matroska', '-live', '1', noCues]);
 console.log(`  no Cues index      -> ${noCues.split('/').pop()}  ${size(noCues)}`);
+
+// Not Matroska at all. The engine only speaks MKV, so an mp4 is what proves the
+// native <video> fallback: the demuxer must reject it with NOT_MATROSKA and the
+// player must hand it to the browser instead of failing. This is the shape a
+// .strm on object storage most often points at, and public/strmcheck.html
+// cannot run without it.
+const nativeMp4 = `${OUT}/native-h264.mp4`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+     '-map', '0:v', '-map', '1:a',
+     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', '-pix_fmt', 'yuv420p',
+     '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', nativeMp4]);
+console.log(`  non-Matroska (mp4) -> ${nativeMp4.split('/').pop()}  ${size(nativeMp4)}`);
+
+// A FRAGMENTED mp4. Since Mp4Demuxer indexes moov's sample tables, this one --
+// whose tables live in every moof instead -- is refused with FRAGMENTED_MP4 and
+// routed to <video>, which plays fMP4 perfectly well (it is what DASH ships).
+// That makes it the fixture for the native fallback now that a plain mp4 is
+// demuxed here: public/strmcheck.html needs a container that is playable but
+// NOT indexable, and after this change an ordinary mp4 no longer qualifies.
+const frag = `${OUT}/frag.mp4`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10', '-map', '0:v', '-map', '1:a',
+     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', '-pix_fmt', 'yuv420p',
+     '-c:a', 'aac', '-b:a', '96k',
+     '-movflags', '+frag_keyframe+empty_moov+default_base_moof', frag]);
+console.log(`  fragmented mp4 (moof)         -> ${frag.split('/').pop()}  ${size(frag)}`);
+
+// The rest of "mainstream containers", which nothing here had ever actually
+// opened. Three different verdicts are expected and all three matter:
+//   .webm  is Matroska underneath -> must still take the REMUX path
+//   .mov   is not -> native leg, same as mp4
+//   .avi / .ts  neither leg demuxes -> must fail by NAME, not by "no EBML header"
+const CONTAINERS = [
+  { file: 'native.mov',     args: ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+                                   '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k'] },
+  { file: 'native-vp9.webm', args: ['-c:v', 'libvpx-vp9', '-speed', '8', '-crf', '45', '-b:v', '0',
+                                    '-pix_fmt', 'yuv420p', '-c:a', 'libopus', '-b:a', '96k'] },
+  { file: 'nodemux.avi',    args: ['-c:v', 'mpeg4', '-q:v', '8', '-c:a', 'libmp3lame', '-b:a', '96k'] },
+  { file: 'nodemux.ts',     args: ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+                                   '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k'] },
+];
+for (const c of CONTAINERS) {
+  const path = `${OUT}/${c.file}`;
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+       '-map', '0:v', '-map', '1:a', ...c.args, path]);
+  console.log(`  ${c.file.padEnd(18)} -> ${size(path)}`);
+}
+
+// Material for the mp4 and FLV demuxers. Each of these exercises something the
+// Matroska path never could, so a passing Matroska suite says nothing about it.
+console.log('\n=== mp4 / flv demuxer material ===');
+
+const srtPath = `${OUT}/sample.srt`;
+writeFileSync(srtPath,
+  '1\n00:00:01,000 --> 00:00:03,000\nHello from tx3g\n\n'
++ '2\n00:00:04,000 --> 00:00:06,000\n{\\an8}Second line, raised\n\n'
++ '3\n00:00:07,000 --> 00:00:09,000\nThird\n');
+
+// Two audio tracks, a text subtitle track, and B-frames -- so ctts (composition
+// offsets) is non-trivial and the track pickers have something to pick.
+// -preset ultrafast would silently set bframes=0 and test nothing.
+const mp4Multi = `${OUT}/mp4-multi.mp4`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+     '-f', 'lavfi', '-i', 'sine=frequency=880:duration=10',
+     '-i', srtPath,
+     '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s',
+     // -g 48: libx264's default keyint is 250, so a 240-frame clip would hold
+     // exactly ONE keyframe and every seek assertion would pass by landing at 0.
+     '-c:v', 'libx264', '-preset', 'fast', '-crf', '30', '-bf', '3', '-g', '48', '-pix_fmt', 'yuv420p',
+     '-c:a', 'aac', '-b:a', '96k', '-c:s', 'mov_text',
+     '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=jpn',
+     '-metadata:s:s:0', 'language=chi', mp4Multi]);
+console.log(`  mp4 2 audio + tx3g + B-frames -> ${mp4Multi.split('/').pop()}  ${size(mp4Multi)}`);
+
+// HEVC/PQ in an mp4. The colour verdict comes off the colr box here, not off a
+// Matroska Colour element -- a completely different code path to the same claim.
+const hdr = `${OUT}/hdr-hevc.mp4`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=6',
+     // setparams stamps the colour on the FRAMES. -color_primaries/-color_trc
+     // as output options do not reach the mov muxer's colr writer -- it takes
+     // the values off the frames -- so those flags produce a file that says
+     // "unspecified" in the container while looking correct in ffprobe's
+     // encoder line. Verified by dumping the colr bytes, not by reading docs.
+     '-vf', 'format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc',
+     '-c:v', 'libx265', '-preset', 'ultrafast', '-crf', '35', '-tag:v', 'hvc1',
+     '-x265-params', 'colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc',
+     // ...and without +write_colr there is no colr box at all, only the SPS.
+     '-movflags', '+write_colr', '-an', hdr]);
+console.log(`  HEVC PQ / BT.2020 in mp4      -> ${hdr.split('/').pop()}  ${size(hdr)}`);
+
+// SRT inside an MKV: demuxed for a long time, never rendered until now.
+const subsMkv = `${OUT}/subs-srt.mkv`;
+run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10', '-i', srtPath,
+     '-map', '0:v', '-map', '1:a', '-map', '2:s',
+     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', '-pix_fmt', 'yuv420p',
+     '-c:a', 'libopus', '-b:a', '96k', '-c:s', 'srt', subsMkv]);
+console.log(`  MKV with an SRT track         -> ${subsMkv.split('/').pop()}  ${size(subsMkv)}`);
+
+for (const [file, acodec] of [['native.flv', 'aac'], ['flv-mp3.flv', 'libmp3lame']]) {
+  const p = `${OUT}/${file}`;
+  run(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=10',
+       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+       '-map', '0:v', '-map', '1:a',
+       // -g 48 again: one keyframe in the whole clip makes every seek assertion
+       // pass by landing at zero.
+       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30', '-g', '48', '-pix_fmt', 'yuv420p',
+       '-c:a', acodec, '-b:a', '96k', p]);
+  console.log(`  FLV h264 + ${acodec.padEnd(12)}    -> ${file}  ${size(p)}`);
+}
 
 // More than one video track. The player picks video[0] and has never seen a
 // file where that choice was not the only one.

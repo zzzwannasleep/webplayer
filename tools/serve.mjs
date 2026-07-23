@@ -16,6 +16,14 @@ const MIME = {
   '.wasm': 'application/wasm',
   '.mkv': 'video/x-matroska',
   '.mp4': 'video/mp4',
+  // The other containers a viewer actually drops on the page. Served with the
+  // right type so a <video> gets the same Content-Type a real host would send
+  // -- and so a Blob built from one carries a type, as a picked File does.
+  '.m4v': 'video/x-m4v',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.avi': 'video/x-msvideo',
+  '.ts': 'video/mp2t',
   '.srt': 'text/plain; charset=utf-8',
   '.ass': 'text/plain; charset=utf-8',
   '.ttf': 'font/ttf',
@@ -47,7 +55,15 @@ createServer((req, res) => {
   if (url === '/' || url === '/public') {
     if (existsSync(join(ROOT, 'public', 'index.html'))) { res.writeHead(302, { Location: '/public/' }).end(); return; }
   }
-  let path = join(ROOT, normalize(url));
+  // TEST AFFORDANCE: /nocors/<path> serves the same bytes with NO
+  // Access-Control-Allow-Origin. Fetched from the other spelling of this host
+  // (127.0.0.1 vs localhost -- different origins, same process) it reproduces
+  // exactly what an S3 bucket with no CORS config does to a browser, which is
+  // the one condition public/strmcheck.html cannot otherwise create and the one
+  // the native <video> fallback exists for. Dev server only.
+  const noCors = url.startsWith('/nocors/');
+
+  let path = join(ROOT, normalize(noCors ? url.slice('/nocors'.length) : url));
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
 
   let st;
@@ -67,7 +83,7 @@ createServer((req, res) => {
     'Content-Type': type,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
+    ...(noCors ? {} : { 'Access-Control-Allow-Origin': '*' }),
   };
 
   const range = req.headers.range;

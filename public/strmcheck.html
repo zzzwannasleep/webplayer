@@ -1,0 +1,154 @@
+<!doctype html><meta charset="utf-8">
+<title>strm / native fallback check</title>
+<!--
+  The native <video> leg cannot be reached from node: it needs a real media
+  element, a real decoder and a real CORS check. This page drives index.html
+  (which takes ?url=) through both legs of Player.load():
+
+    a fragmented mp4 -> refused with FRAGMENTED_MP4 (its sample tables live in
+               every moof, not in moov), so the player must fall back to
+               <video src>, which plays fMP4 fine, rather than fail.
+               NOTE: a PLAIN mp4 is no longer a fallback case -- src/demux/mp4.js
+               demuxes it -- so this is the fixture that is playable but not
+               indexable, which is what the native leg actually exists for.
+    an mkv   -> must STILL take the remux path, untouched
+
+  and then checks the consequences the fallback is supposed to have: no track
+  picker, no colour verdict, and -- because a tainted canvas would throw and a
+  tainted media element would silence the video forever -- that Anime4K and the
+  gain row are offered only when the element loaded with valid CORS.
+-->
+<style>iframe{width:900px;height:560px;border:1px solid #333}body{font:13px ui-monospace,monospace}</style>
+<pre id="out"></pre>
+<script>
+const out = [];
+const ok = (n, c, d = '') => out.push((c ? 'PASS  ' : 'FAIL  ') + n + (d ? '  -> ' + d : ''));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const send = () => fetch('/collect', { method: 'POST', body: out.join('\n') + '\n' }).catch(() => {});
+setTimeout(() => { out.push('WATCHDOG', 'STRM CHECK DONE'); send(); }, 90000);
+
+// Open index.html on a url and wait until it has either rendered a menu or
+// given up, so a failure is a reported failure rather than a timeout.
+async function open(url) {
+  const f = document.createElement('iframe');
+  f.src = './index.html?url=' + encodeURIComponent(url);
+  document.body.append(f);
+  const errs = [];
+  await new Promise(r => { f.onload = r; });
+  f.contentWindow.addEventListener('error', e => errs.push(e.message));
+  f.contentWindow.addEventListener('unhandledrejection', e => errs.push('rejected: ' + (e.reason?.message || e.reason)));
+  const d = f.contentDocument;
+  for (let i = 0; i < 60 && !d.querySelector('#picks .mrow[data-group]'); i++) await sleep(500);
+  return { f, d, w: f.contentWindow, errs };
+}
+const groupsOf = (d) => {
+  d.getElementById('gearBtn').click();
+  return [...d.getElementById('picks').querySelectorAll('.mrow[data-group]')].map(x => x.dataset.group);
+};
+
+(async () => {
+try {
+  // --- 1) mp4 over http: the NOT_MATROSKA -> native fallback ---------------
+  {
+    const { f, d, w, errs } = await open('/samples/frag.mp4');
+    ok('frag mp4: page evaluated with no error', errs.length === 0, errs.join(' | ') || 'clean');
+    const v = d.querySelector('video');
+    ok('frag mp4: the element got a real src, not a blob (i.e. not MSE)',
+      !!v && /frag\.mp4/.test(v.src), v ? v.src.slice(0, 70) : 'no video');
+    ok('frag mp4: metadata arrived (duration ~10s)', v && v.duration > 9 && v.duration < 11, v && String(v.duration));
+    ok('frag mp4: it actually decodes frames', v && v.videoWidth > 0, v ? `${v.videoWidth}x${v.videoHeight}` : '-');
+    // Same-origin here, so crossorigin="anonymous" must have succeeded and the
+    // extras must therefore stay available -- that is the whole point of trying
+    // the CORS attempt first instead of going bare.
+    ok('frag mp4: loaded WITH crossorigin, so the canvas is readable',
+      v && v.getAttribute('crossorigin') === 'anonymous', v && String(v.getAttribute('crossorigin')));
+    const groups = groupsOf(d);
+    ok('frag mp4: no 轨道 picker is offered (nothing was demuxed)', !groups.includes('track'), groups.join(','));
+    ok('frag mp4: a 播放方式 row explains the fallback instead', groups.includes('native'), groups.join(','));
+    const badges = d.querySelector('.badges')?.textContent || '';
+    ok('frag mp4: does not claim SDR it never measured', !/^SDR/.test(badges.trim()) && /未探测/.test(badges), badges.trim());
+    await sleep(400);
+    ok('frag mp4: playback is running', v && v.currentTime > 0, v && `t=${v.currentTime.toFixed(2)}`);
+    f.remove();
+  }
+
+  // --- 2) mkv must be untouched: still the remux path ----------------------
+  {
+    const { f, d, errs } = await open('/samples/video-avc.mkv');
+    ok('mkv: page evaluated with no error', errs.length === 0, errs.join(' | ') || 'clean');
+    const v = d.querySelector('video');
+    ok('mkv: REGRESSION — still goes through MSE (blob src)', !!v && v.src.startsWith('blob:'), v ? v.src.slice(0, 40) : 'no video');
+    const groups = groupsOf(d);
+    ok('mkv: REGRESSION — the 轨道 picker is still offered', groups.includes('track'), groups.join(','));
+    ok('mkv: no native row on the remux path', !groups.includes('native'), groups.join(','));
+    f.remove();
+  }
+  // --- 3) a cross-origin source with NO CORS header -----------------------
+  // The S3-bucket-without-a-CORS-config case. fetch() cannot read a byte of it,
+  // so the remux path dies with a bare TypeError -- but a <video> with no
+  // crossorigin attribute needs no CORS at all and plays it fine. What must
+  // hold: it plays, and the two features that would break on a tainted element
+  // (Anime4K reads pixels off a canvas; the gain stage calls
+  // createMediaElementSource, which cannot be undone) are NOT offered.
+  {
+    const other = location.origin.includes('localhost')
+      ? location.origin.replace('localhost', '127.0.0.1') : location.origin.replace('127.0.0.1', 'localhost');
+    const { f, d, errs } = await open(other + '/nocors/samples/native-h264.mp4');
+    ok('nocors: page evaluated with no error', errs.length === 0, errs.join(' | ') || 'clean');
+    const v = d.querySelector('video');
+    ok('nocors: played anyway, via a bare native element', !!v && /native-h264\.mp4/.test(v.src || ''), v ? (v.src || '').slice(0, 70) : 'no video');
+    ok('nocors: crossorigin was NOT set (it would have been refused)',
+      v && !v.hasAttribute('crossorigin'), v && String(v.getAttribute('crossorigin')));
+    ok('nocors: frames decode', v && v.videoWidth > 0, v ? `${v.videoWidth}x${v.videoHeight}` : '-');
+    const groups = groupsOf(d);
+    ok('nocors: 超分 is withheld (canvas would be tainted)', !groups.includes('a4k'), groups.join(','));
+    ok('nocors: 响度 is withheld (createMediaElementSource would mute it for good)',
+      !groups.includes('gain'), groups.join(','));
+    ok('nocors: the 播放方式 row is there to explain it', groups.includes('native'), groups.join(','));
+    f.remove();
+  }
+  // --- 4) the direct-connect candidate ladder (P2) -------------------------
+  // A .strm can be fetched from the remote URL directly or through Emby's
+  // proxy. loadAny() must walk them in order and land on the first that opens,
+  // so a remote that refuses the browser costs one failed probe, not a broken
+  // playback. Exercised against the real Player rather than through the Emby
+  // page, because the ladder is the thing under test -- not the query plumbing.
+  {
+    const { Player } = await import('../src/player.js');
+    const v = document.createElement('video');
+    v.muted = true; document.body.append(v);
+    const p = new Player(v);
+    const logs = [];
+    p.log = (m) => logs.push(m);
+
+    // 4a) first candidate dead, second good -> lands on the second.
+    const got = await p.loadAny(['/samples/does-not-exist.mkv', '/samples/video-avc.mkv']);
+    ok('ladder: fell through to the working candidate', !!got && !got.native, got && (got.native ? 'native' : 'remuxed'));
+    ok('ladder: opened from the SECOND candidate', /video-avc\.mkv$/.test(p.openedFrom || ''), p.openedFrom);
+    ok('ladder: said so in the log', logs.some(m => /候选源 1\/2/.test(m)), logs.find(m => /候选源/.test(m)) || '(nothing logged)');
+
+    // 4b) A non-last candidate must NOT settle for the native leg: remuxing the
+    //     next candidate beats playing this one without tracks or subtitles.
+    const mp4First = await p.loadAny(['/samples/frag.mp4', '/samples/video-avc.mkv']);
+    ok('ladder: a non-indexable candidate yields to a remuxable one instead of going native',
+      !mp4First.native && /video-avc\.mkv$/.test(p.openedFrom || ''),
+      `${mp4First.native ? 'native' : 'remuxed'} from ${p.openedFrom}`);
+
+    // 4c) ...but the LAST candidate may still use the native leg.
+    const onlyMp4 = await p.loadAny(['/samples/frag.mp4']);
+    ok('ladder: the last candidate is still allowed to go native', onlyMp4.native === true,
+      onlyMp4.native ? 'native' : 'remuxed');
+
+    // 4d) everything dead -> a real error, not a silent nothing.
+    let threw = '';
+    try { await p.loadAny(['/samples/nope-a.mkv', '/samples/nope-b.mkv']); } catch (e) { threw = e.message; }
+    ok('ladder: all candidates dead -> throws the last failure', !!threw, threw || '(did not throw)');
+
+    await p.dispose(); v.remove();
+  }
+} catch (e) { out.push('ERROR ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]); }
+out.push('STRM CHECK DONE');
+document.getElementById('out').textContent = out.join('\n');
+send();
+})();
+</script>

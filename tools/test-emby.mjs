@@ -3,7 +3,7 @@
 // node check. subtitleDelivery picks the render path; subtitleUrl builds the
 // Emby extraction URL for the text path.
 import assert from 'node:assert/strict';
-import { EmbyClient, subtitleDelivery, reline, servers, serverIcons } from '../src/emby/client.js';
+import { EmbyClient, subtitleDelivery, reline, servers, serverIcons, isRemoteSource, directUrl } from '../src/emby/client.js';
 
 // --- subtitleDelivery: which path a chosen subtitle stream takes ------------
 assert.equal(subtitleDelivery({ Codec: 'ass' }), 'client', 'embedded ASS renders in-browser');
@@ -60,6 +60,43 @@ assert.equal(reline('https://a.example/emby/Videos/42/stream.mkv?x=1', 'https://
 // URL built against some other host (shouldn't happen): fall back to path+query.
 assert.equal(reline('https://c.example/Videos/9/stream.mkv?x=1', 'https://a.example', 'https://b.example'),
   'https://b.example/Videos/9/stream.mkv?x=1', 'unknown prefix falls back to path+query');
+
+// --- .strm / remote sources -------------------------------------------------
+// Emby resolves the .strm server-side, so the client only ever sees the SHAPE
+// it produces. Two things must hold for those: they are recognised, and the
+// stream URL never ends in ".strm" (not a container -- Emby would be asked to
+// serve a format that does not exist).
+assert.equal(isRemoteSource({ Protocol: 'Http' }), true, 'Protocol=Http is remote');
+assert.equal(isRemoteSource({ IsRemote: true }), true, 'IsRemote flag is remote');
+assert.equal(isRemoteSource({ Path: 'https://s3.example/a.mkv?X-Amz-Signature=x' }), true, 'http path is remote');
+assert.equal(isRemoteSource({ Path: '/media/movies/a.strm' }), true, '.strm path is remote');
+assert.equal(isRemoteSource({ Protocol: 'File', Path: '/media/movies/a.mkv' }), false, 'local file is not remote');
+assert.equal(isRemoteSource(null), false, 'no source is not remote');
+
+const ext = src => new URL(c.streamUrl('it1', src)).pathname.split('/stream')[1];
+assert.equal(ext({ Id: 's', Container: 'mkv' }), '.mkv', 'a real container is still appended');
+assert.equal(ext({ Id: 's', Container: 'strm', Path: 'https://s3.example/movie.mp4?sig=1' }), '.mp4',
+  'Container=strm falls through to the real extension inside the .strm URL');
+assert.equal(ext({ Id: 's', Container: 'strm', Path: 'https://cdn.example/redirect?id=7' }), '',
+  'a 302 jump-board URL has no extension to borrow -> no suffix, let Emby decide');
+assert.equal(ext({ Id: 's' }), '', 'no container and no path -> no suffix');
+assert.equal(ext({ Id: 's', Container: 'mp4,mov' }), '.mp4', 'multi-container takes the first');
+assert.equal(ext({ Id: 's', Container: 'm3u8', Path: 'https://a.example/x.m3u8' }), '',
+  'a playlist is not a container either');
+
+// --- directUrl: the direct-connect candidate --------------------------------
+// Only http(s) is a candidate. Everything else a .strm may legally hold is
+// something a page cannot fetch, so offering it would burn a failed request
+// before the server path runs anyway.
+assert.equal(directUrl({ Protocol: 'Http', Path: 'https://s3.example/a.mkv?X-Amz-Signature=x' }),
+  'https://s3.example/a.mkv?X-Amz-Signature=x', 'a signed https target is a candidate');
+assert.equal(directUrl({ IsRemote: true, Path: ' http://alist.example/d/x.mkv ' }),
+  'http://alist.example/d/x.mkv', 'trimmed');
+assert.equal(directUrl({ Protocol: 'Http', Path: 'rtsp://cam.example/live' }), null, 'rtsp is not fetchable');
+assert.equal(directUrl({ Protocol: 'Http', Path: '\\\\nas\\share\\a.mkv' }), null, 'a UNC share is not fetchable');
+assert.equal(directUrl({ Protocol: 'File', Path: '/media/a.mkv' }), null, 'a local file has no direct URL');
+assert.equal(directUrl({ Protocol: 'Http' }), null, 'no path -> no candidate');
+assert.equal(directUrl(null), null, 'no source -> no candidate');
 
 // --- serverIcons: server branding first, user avatar as the fallback --------
 assert.deepEqual(serverIcons({ url: 'https://one.example', token: 'T', userId: 'U1' }), [

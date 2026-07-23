@@ -48,7 +48,9 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   if (Test-Path 'probe-result.txt') {
     $c = Get-Content 'probe-result.txt' -Raw
-    if ($c -match 'ALL BROWSER CHECKS PASSED|CHECK\(S\) FAILED|DIAG DONE') { break }
+    # ...|CHECK DONE catches bootcheck/strmcheck, which end with their own
+    # sentinel and until now burned the whole timeout before the loop noticed.
+    if ($c -match 'ALL BROWSER CHECKS PASSED|CHECK\(S\) FAILED|DIAG DONE|CHECK DONE') { break }
     if ($c.Length -eq $lastSize) { $null = $shell.AppActivate($proc.Id) }
     $lastSize = $c.Length
   }

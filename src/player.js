@@ -55,6 +55,7 @@ export class Player {
     this.info = null;
     this.log = () => {};
     this.onSubtitlePacket = null;
+    this.onStalled = null;        // read loop died after playback began
 
     this.mediaSource = null;
     this.streams = [];            // { track, mime, kind, sb, queue }
@@ -77,7 +78,196 @@ export class Player {
 
   _post(msg, transfer) { this._worker?.postMessage(msg, transfer || []); }
 
-  async load(input) {
+  // Three failures mean "this engine can't read the stream", not "the stream is
+  // unreachable": the container isn't Matroska (a .strm pointing at an mp4 is
+  // the common case), nobody would state the total length, or the server won't
+  // do Range. In all three the fetch itself SUCCEEDED, so CORS is already proven
+  // and the browser's own decoder deserves a turn. Anything else stays fatal --
+  // falling back on a genuine network/CORS error would only fail again, slower,
+  // with a worse message.
+  // (The container codes are all "we opened it and this engine cannot index
+  // it": an unknown container, a fragmented mp4 whose sample tables live in
+  // every moof rather than in moov, or a head that sniffed as one thing and
+  // failed to parse as it.)
+  static NATIVE_FALLBACK = new Set([
+    'NOT_MATROSKA', 'NO_SIZE', 'NO_RANGE',
+    'UNKNOWN_CONTAINER', 'NOT_MP4', 'NOT_FLV', 'FRAGMENTED_MP4',
+  ]);
+
+  // The other way the remux path dies: the fetch never completed at all. The
+  // browser refuses to say why (CORS block, DNS, offline and mixed content all
+  // surface as one bare TypeError -- there is no API that separates them), and
+  // for a .strm pointing at object storage the likeliest cause by far is simply
+  // no Access-Control-Allow-Origin. That is still playable: a <video> WITHOUT
+  // the crossorigin attribute needs no CORS whatsoever. It costs the pixels
+  // (tainted canvas) and the audio graph, which is why this leg is entered with
+  // cors=false and the UI greys those two out.
+  static CORS_BLIND = /Failed to fetch|NetworkError|Load failed|CORS|ERR_FAILED/i;
+
+  // Containers NEITHER leg can open: this engine speaks Matroska only, and no
+  // browser demuxes these either. Worth naming, because the failure the viewer
+  // otherwise sees is "not a Matroska file" -- perfectly true of an .avi, and
+  // perfectly useless.
+  static NO_DEMUXER = /\.(avi|flv|rm|rmvb|wmv|asf|ts|m2ts|mts|mpg|mpeg|vob|divx|3gp|ogm)$/i;
+  static hint(name) {
+    const ext = (String(name || '').split(/[?#]/)[0].match(/\.[a-z0-9]{2,5}$/i) || [''])[0];
+    return Player.NO_DEMUXER.test(ext)
+      ? `${ext} 容器浏览器不解封装，本播放器也只解 Matroska — 先转封装即可（ffmpeg -i in${ext} -c copy out.mkv）` : '';
+  }
+
+  /**
+   * Try several sources for the SAME item, best first, and return the first that
+   * opens. Used for a .strm item, which can be fetched two ways: straight from
+   * the remote URL the .strm points at (no bytes through Emby at all) or from
+   * Emby's own proxy of it.
+   *
+   * Every candidate but the last is tried WITHOUT the native fallback, and that
+   * is the whole subtlety: playing a direct link natively costs the track
+   * picker, client-side ASS/PGS and the HDR verdict, whereas remuxing the SAME
+   * content through the server keeps all three. So a candidate that cannot be
+   * remuxed must yield to the next one rather than settle for native. Only when
+   * nothing is left does the last candidate get to use every leg it has.
+   */
+  async loadAny(candidates) {
+    const list = [].concat(candidates).filter(Boolean);
+    if (!list.length) throw new Error('no source to open');
+    let last;
+    for (let i = 0; i < list.length; i++) {
+      const isLast = i === list.length - 1;
+      try {
+        return await this.load(list[i], { allowNative: isLast });
+      } catch (e) {
+        last = e;
+        if (!isLast) this.log(`候选源 ${i + 1}/${list.length} 打不开（${e.message}）— 换下一个`, 'warn');
+      }
+    }
+    throw last;
+  }
+
+  /**
+   * Open a source. Tries the remux pipeline first (it is the only path that
+   * gives per-track choice, embedded ass/pgs and the HDR-correct fMP4), and
+   * drops to plain <video src> when the container -- or the origin -- is
+   * outside its reach. `allowNative: false` suppresses that second leg, for a
+   * caller that still has a better candidate to try (see loadAny).
+   */
+  async load(input, { allowNative = true } = {}) {
+    const blob = input instanceof Blob ? input : null;    // a picked or dropped file
+    const url = typeof input === 'string' ? input : (input?.url ?? null);
+    // Which candidate the open actually came from. loadAny() may have walked
+    // past several, and the page reports the byte source to the viewer -- so it
+    // must be read from what happened, not from what was preferred.
+    this.openedFrom = url ?? null;
+    try {
+      return await this._loadMse(input);
+    } catch (e) {
+      if (!allowNative) throw e;
+      // A local File has no URL to give a <video> -- which was the ONLY reason
+      // the fallback stayed out of reach for a picked .mp4, even though the
+      // picker offers .mp4/.m4v. Mint one here, in the failure path, so an
+      // ordinary remux load never creates an object URL it must remember to
+      // revoke. (_teardown revokes whatever is on the element.)
+      const src = url ?? (blob ? URL.createObjectURL(blob) : null);
+      if (!src) throw e;
+      const spent = () => { if (blob) URL.revokeObjectURL(src); };
+
+      // Readable, wrong container/shape: CORS is proven, so keep the extras.
+      if (Player.NATIVE_FALLBACK.has(e.code)) {
+        this.log(`${e.message} — 交给浏览器原生解码`, 'warn');
+        try {
+          return await this.loadNative(src, e.code, true, blob);
+        } catch (e2) {
+          // Both legs are gone. If the container is one nothing here demuxes,
+          // say THAT -- "not a Matroska file" is a true and worthless thing to
+          // tell someone who opened an .avi.
+          spent();
+          const hint = Player.hint(blob?.name || src);
+          throw hint ? Object.assign(new Error(hint), { code: 'NO_DEMUXER' })
+                     : Object.assign(new Error(e.message), { code: e.code, nativeAlsoFailed: e2.message });
+        }
+      }
+      // Unreadable: go straight to a bare element, no crossorigin attempt. Only
+      // ever a remote condition -- a Blob read does not fail on CORS.
+      if (!blob && Player.CORS_BLIND.test(e.message)) {
+        this.log(`字节流读取失败（${e.message}）— 尝试无跨域凭证的原生播放`, 'warn');
+        try {
+          return await this.loadNative(src, 'NO_CORS', false);
+        } catch (e2) {
+          // Report the ORIGINAL failure, which is the one that names a fixable
+          // cause; the native retry only ever says "MEDIA_ERR_*" and would send
+          // the viewer looking in the wrong place.
+          throw Object.assign(new Error(e.message), { code: e.code, nativeAlsoFailed: e2.message });
+        }
+      }
+      spent();
+      throw e;
+    }
+  }
+
+  /**
+   * The fallback leg: let the browser demux and decode. Everything this player
+   * adds on top of a <video> is built on READING the bytes, so all of it is off
+   * here -- no track picking, no client-side ass/pgs, no HDR verdict. Whether
+   * Anime4K and the WebAudio gain stage survive comes down to one bit: a media
+   * element loaded WITHOUT crossorigin taints the canvas and silences
+   * createMediaElementSource. So try crossorigin="anonymous" first (which the
+   * probe above already showed the origin allows) and keep them; only if that
+   * load fails -- a redirect to a CDN that does not send the header -- retry
+   * bare and let the UI grey them out. `nativeCors` is that bit.
+   */
+  async loadNative(url, reason, tryCors = true, blob = null) {
+    await this._teardown();
+    const v = this.video;
+
+    const attempt = (cors) => new Promise((resolve, reject) => {
+      const done = (fn, arg) => { clearTimeout(timer); v.removeEventListener('loadedmetadata', ok); v.removeEventListener('error', bad); fn(arg); };
+      const ok = () => done(resolve);
+      const bad = () => done(reject, new Error(v.error ? `原生播放失败 (code ${v.error.code}): ${v.error.message || '浏览器未给出原因'}` : '原生播放失败'));
+      const timer = setTimeout(() => done(reject, new Error('原生播放：15 秒内没有拿到元数据')), 15000);
+      v.addEventListener('loadedmetadata', ok);
+      v.addEventListener('error', bad);
+      if (cors) v.setAttribute('crossorigin', 'anonymous'); else v.removeAttribute('crossorigin');
+      v.src = url;
+      v.load();
+    });
+
+    this.nativeCors = tryCors;
+    if (tryCors) {
+      try {
+        await attempt(true);
+      } catch (e) {
+        // Bare retry. Worth it: it is the difference between playing without the
+        // extras and not playing at all. Reached when the stream redirects to a
+        // host that sends no CORS header even though the first hop did.
+        this.log(`crossorigin 载入失败 (${e.message})，改用无跨域凭证重试 — 超分与增益将不可用`, 'warn');
+        this.nativeCors = false;
+        await attempt(false);
+      }
+    } else {
+      await attempt(false);
+    }
+
+    // A shape render() can consume unchanged. `native` is what the UI branches
+    // on; the single pseudo-track keeps the "video/decode" read-out honest
+    // instead of inventing codec details nobody measured.
+    this.info = {
+      native: true, nativeReason: reason, nativeCors: this.nativeCors,
+      duration: Number.isFinite(v.duration) ? v.duration : 0,
+      // Nothing read the bytes, so there is no container name to report; the
+      // basename is the only honest label available. A local file at least
+      // still knows its own name and length -- an object URL would show a uuid.
+      name: blob?.name || decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() || '远程流'),
+      size: blob?.size || 0, fonts: 0,
+      hdr: null, dynamicHdr: null, hdr10plus: false, dolbyVision: null,
+      video: [{ label: '原生解码', supported: true, track: { codecId: '浏览器内置', language: '' } }],
+      audio: [], subtitles: [],
+    };
+    this.log(`原生播放已就绪（${reason}）· 时长 ${this.info.duration ? this.info.duration.toFixed(1) + 's' : '未知'}`
+      + (this.nativeCors ? '' : ' · canvas 受污染，超分/增益停用'));
+    return this.info;
+  }
+
+  async _loadMse(input) {
     this._spawn();
     // Switching files: tear down the previous MediaSource/streams first, so a
     // rapid load(B) after load(A)/play(A) does not leave the old pipeline
@@ -101,6 +291,10 @@ export class Player {
 
   /** Start playback with the chosen video/audio track indices. */
   async play({ videoIndex = 0, audioIndex = 0 } = {}) {
+    // Native leg: the element already holds the stream and there are no tracks
+    // to switch between. Tearing down here would drop the src that IS the
+    // playback -- so this is a no-op, not an error, and callers need no branch.
+    if (this.info?.native) return;
     await this._teardown();
 
     const v = this.info.video[videoIndex];
@@ -174,7 +368,11 @@ export class Player {
       case 'flush': this._onFlush(); break;
       case 'eof': this._eofSeen = true; this.transcoder?.flush(); this._maybeEnd('worker reached end'); break;
       case 'log': this.log(m.msg, m.level); break;
-      case 'error': this._pending?.reject(new Error(m.message)); this._pending = null; break;
+      // The read loop died after playback had already started. Nothing here can
+      // fix it -- the page owns the candidate list and the playhead -- so it is
+      // forwarded, once, to whoever is listening.
+      case 'stalled': this.onStalled?.(m); break;
+      case 'error': this._pending?.reject(Object.assign(new Error(m.message), { code: m.code })); this._pending = null; break;
     }
   }
 
@@ -185,6 +383,14 @@ export class Player {
       sb = this.mediaSource.addSourceBuffer(mime);
     } catch (e) {
       this.log(`addSourceBuffer("${mime}") failed: ${e.name} ${e.message}`, 'error');
+      // ...and tell play() about it. It is awaiting one init per chosen track;
+      // returning quietly here leaves that promise unresolved FOREVER, so a
+      // rejected SourceBuffer showed up as a player that never started and
+      // never said why -- no error, no timeout, nothing to see in the UI.
+      if (this._pending?.op === 'play') {
+        this._pending.reject(Object.assign(new Error(`SourceBuffer 建立失败 (${mime}): ${e.message}`), { code: 'NO_SOURCEBUFFER' }));
+        this._pending = null;
+      }
       return;
     }
     sb.mode = 'segments';
@@ -297,5 +503,12 @@ export class Player {
     if (ms?.readyState === 'open') { try { ms.endOfStream(); } catch {} }
     this.mediaSource = null;
     if (this.video.src) { URL.revokeObjectURL(this.video.src); this.video.removeAttribute('src'); this.video.load(); }
+    // Detaching from the element is what actually releases the old
+    // MediaSource's decoder streams, and it is NOT synchronous. Opening the
+    // next file straight away can then fail with "reached the limit of
+    // SourceBuffer objects" on a brand-new MediaSource holding exactly one --
+    // the limit is on what the renderer still has open, not on this object.
+    // Bounded: a quarter second, then proceed and let the error surface.
+    if (ms) for (let i = 0; i < 25 && ms.readyState !== 'closed'; i++) await new Promise(r => setTimeout(r, 10));
   }
 }

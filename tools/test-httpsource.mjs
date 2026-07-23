@@ -137,5 +137,50 @@ console.log('=== HttpSource ===');
   check('redirect: size from the CDN probe', src.size, 2048);
 }
 
+// 9) A .strm-backed Emby item has no Size in PlaybackInfo, so nothing seeds the
+//    size from above; if the proxied stream also does not CORS-expose
+//    Content-Range, open() used to give up. The no-Range follow that already
+//    runs first has a Content-Length that IS the whole file -- take it.
+{
+  let call = 0;
+  const fetchMock = async () => {
+    call++;
+    return call === 1
+      ? { ...resp(200), url: '', headers: { get: k => (k.toLowerCase() === 'content-length' ? '7340032' : null) } }
+      : resp(206, new Uint8Array([0, 0]), {});     // 206 proves Range; Content-Range NOT exposed
+  };
+  const src = new HttpSource('http://emby/Videos/9/stream?api_key=t', { fetch: fetchMock });
+  await src.open();
+  check('strm: size recovered from the follow GET Content-Length', src.size, 7340032);
+}
+
+// 10) ...but an exposed Content-Range still wins over that hint.
+{
+  let call = 0;
+  const fetchMock = async () => {
+    call++;
+    return call === 1
+      ? { ...resp(200), url: '', headers: { get: k => (k.toLowerCase() === 'content-length' ? '111' : null) } }
+      : resp(206, new Uint8Array([0, 0]), { 'content-range': 'bytes 0-1/222' });
+  };
+  const src = new HttpSource('http://emby/Videos/9/stream', { fetch: fetchMock });
+  await src.open();
+  check('strm: Content-Range still beats the Content-Length hint', src.size, 222);
+}
+
+// 11) The three failures src/player.js routes to the native <video> leg must
+//     carry a machine-readable code -- postMessage flattens Errors, so matching
+//     on the prose would silently stop working the day a message is reworded.
+{
+  const codeOf = async (fetchMock, opts) => {
+    const src = new HttpSource('http://cdn/x', { fetch: fetchMock, ...opts });
+    try { await src.open(); return '(no throw)'; } catch (e) { return e.code ?? '(uncoded)'; }
+  };
+  check('code: 200 to a Range probe -> NO_RANGE',
+    await codeOf(async () => resp(200, new Uint8Array([0, 0]), {})), 'NO_RANGE');
+  check('code: 206 with no total anywhere -> NO_SIZE',
+    await codeOf(async () => resp(206, new Uint8Array([0, 0]), {})), 'NO_SIZE');
+}
+
 console.log(failures ? `\n${failures} HTTPSOURCE CHECK(S) FAILED` : '\nALL HTTPSOURCE CHECKS PASSED');
 process.exit(failures ? 1 : 0);

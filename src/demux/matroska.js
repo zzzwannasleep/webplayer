@@ -74,6 +74,13 @@ export class FileSource {
  */
 const EXPIRED = new Set([401, 403, 410]);
 
+// A failure the CALLER can route around rather than just report. Every one of
+// these means "this engine cannot read the stream", never "the network is
+// broken" -- the fetch itself succeeded, so CORS is already proven working and
+// the browser's own decoder is still worth a try. src/player.js turns exactly
+// these three into the native <video> fallback; anything else stays fatal.
+const coded = (code, msg) => Object.assign(new Error(msg), { code });
+
 export class HttpSource {
   constructor(url, { resolve = null, fetch: fetchImpl = null, size = 0 } = {}) {
     this.origin = url;        // the URL the user gave; handed to resolve()
@@ -116,6 +123,13 @@ export class HttpSource {
     try { r = await this._fetch(this.url); }
     catch { return; }                          // network/CORS: let the Range probe surface it
     if (r.url && r.url !== this.url) { this.url = r.url; this.name = r.url.split('/').pop(); }
+    // Second thing worth taking off this response: its Content-Length. A .strm-
+    // backed item has no Size in Emby's PlaybackInfo (the server never probed the
+    // remote file), so nothing seeds the size from above, and a proxied stream
+    // need not CORS-expose Content-Range to the Range probe below. This plain GET
+    // is the one response whose Content-Length IS the whole file -- keep it as the
+    // fallback total before the body is dropped, and open() has no reason to fail.
+    if (!(this.size > 0)) this.size = Number(r.headers.get('content-length')) || 0;
     r.body?.cancel().catch(() => {});          // the final URL was all we wanted; drop the body
   }
 
@@ -129,7 +143,7 @@ export class HttpSource {
     // Content-Range ("bytes 0-1/TOTAL"), in one request. The total must be
     // CORS-exposed; that is the server's to do (Access-Control-Expose-Headers).
     const r = await this._fetch(this.url, { headers: { Range: 'bytes=0-1' } });
-    if (r.status !== 206) throw new Error(`server does not support Range requests (probe -> ${r.status})`);
+    if (r.status !== 206) throw coded('NO_RANGE', `server does not support Range requests (probe -> ${r.status})`);
     const total = Number(r.headers.get('content-range')?.split('/')[1]);
     await r.arrayBuffer().catch(() => {});    // drain the 2-byte probe body
     // Prefer the header when the server exposes it (authoritative for the URL
@@ -137,7 +151,7 @@ export class HttpSource {
     // fail when we have neither -- the 206 already proved Range works, so the
     // sole missing piece is the total, and reads never need the header.
     if (total > 0) this.size = total;
-    else if (!(this.size > 0)) throw new Error('server did not expose a Content-Range total size (check Access-Control-Expose-Headers)');
+    else if (!(this.size > 0)) throw coded('NO_SIZE', 'server did not expose a Content-Range total size (check Access-Control-Expose-Headers)');
     return this;
   }
 
@@ -175,7 +189,10 @@ export class MatroskaDemuxer {
     let head = await this.src.read(0, 262144);
     const r = new Reader(head, 0);
 
-    if (readId(r) !== ID.EBML) throw new Error('not a Matroska file (no EBML header)');
+    // The commonest way to land here is a .strm pointing at an mp4 on object
+    // storage: Emby hands over a perfectly good stream that this remuxer simply
+    // does not speak. Coded, so the caller can hand it to the browser instead.
+    if (readId(r) !== ID.EBML) throw coded('NOT_MATROSKA', 'not a Matroska file (no EBML header)');
     r.skip(readSize(r));
 
     if (readId(r) !== ID.Segment) throw new Error('no Segment element');

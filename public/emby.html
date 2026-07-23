@@ -191,6 +191,7 @@
   .chooser{display:flex;flex-direction:column;gap:20px;max-width:900px}
   .chz .lbl{font-size:12px;font-weight:700;letter-spacing:.07em;color:var(--fg-mute);text-transform:uppercase;margin-bottom:9px}
   .chz .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .chnote{font-size:12.5px;line-height:1.6;color:var(--fg-mute);border-left:2px solid var(--line);padding-left:11px}
   .chopt{padding:9px 15px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--fg-dim);border:1px solid var(--line);background:var(--surface);cursor:pointer;transition:.2s}
   .chopt:hover{color:var(--fg);border-color:var(--line-2)}.chopt.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
   #preplay{position:fixed;inset:0;z-index:85;display:none;place-items:center;background:rgba(6,8,12,.62);backdrop-filter:blur(6px);padding:24px}
@@ -401,7 +402,10 @@
 <div id="toast"></div>
 
 <script type="module">
-import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery } from '../src/emby/client.js';
+// `directUrl` is aliased: this page already has a function of that name for the
+// right-click menu, which resolves the EMBY stream URL. The imported one is a
+// different thing entirely -- the URL inside a .strm.
+import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery, isRemoteSource, directUrl as strmTargetUrl } from '../src/emby/client.js';
 
 const $ = s => document.querySelector(s);
 const store = { get(k,d){try{const v=localStorage.getItem('linweb:'+k);return v==null?d:JSON.parse(v);}catch{return d;}}, set(k,v){try{localStorage.setItem('linweb:'+k,JSON.stringify(v));}catch{}} };
@@ -599,10 +603,16 @@ function chooserHTML(item){
   const auds = (src.MediaStreams||[]).filter(s=>s.Type==='Audio');
   const subs = (src.MediaStreams||[]).filter(s=>s.Type==='Subtitle');
   const row = (k,label,opts,def)=> opts.length ? `<div class="chz" data-k="${k}"><div class="lbl">${label}</div><div class="opts">${opts.map((o,i)=>`<button class="chopt ${i===Math.min(def,opts.length-1)?'on':''}" data-v="${i}">${o}</button>`).join('')}</div></div>` : '';
+  // A .strm item Emby has not played yet reports no tracks at all: it treats the
+  // file as a pointer and only ffprobes the remote target on first playback. An
+  // unexplained empty chooser reads as "this item is broken", so say what it is
+  // -- the tracks appear by themselves the second time round.
+  const unprobed = isRemoteSource(src) && !(src.MediaStreams||[]).length;
   return `<div class="chooser" id="ppChooser">
     ${row('ver','版本 / 线路', sources.map(s=>`${(s.Name||s.Container||'源')} · ${s.Size?(s.Size/2**30).toFixed(1)+'GB':''}`), PREF.ver)}
     ${row('aud','音频', auds.map(a=>a.DisplayTitle||`${a.Language||''} ${a.Codec}`.trim()), PREF.aud)}
-    ${row('sub','字幕', ['关闭', ...subs.map(s=>s.DisplayTitle||`${s.Language||''} ${s.Codec}`.trim())], PREF.sub)}</div>`;
+    ${row('sub','字幕', ['关闭', ...subs.map(s=>s.DisplayTitle||`${s.Language||''} ${s.Codec}`.trim())], PREF.sub)}
+    ${unprobed ? '<div class="chnote">远程源（.strm）· 服务器尚未探测轨道信息，直接播放即可；播放一次后音频与字幕选项就会出现。</div>' : ''}</div>`;
 }
 function wireChooser(item){
   $('#ppChooser').querySelectorAll('.opts').forEach(g=>g.querySelectorAll('.chopt').forEach(b=>b.addEventListener('click', ()=>{
@@ -657,6 +667,14 @@ async function play(item, choice, fromStart){
     // the chosen audio + subtitle below so the detail-page picks are honoured --
     // the generic index.html player knew nothing about either.
     const q = new URLSearchParams({ url, title, id: item.Id });
+    // For a .strm item, the URL inside it travels alongside the Emby one as a
+    // CANDIDATE -- play.html tries it first so the bytes need not pass through
+    // the server at all. Deliberately un-probed here: the comment above is the
+    // scar from pre-resolving before this navigation, and the same reasoning
+    // applies twice over to a signed link. The page tests it at load time, when
+    // the answer is still true, and falls back to `url` if it is not.
+    const direct = strmTargetUrl(source);
+    if (direct) q.set('direct', direct);
     if (source?.Id) q.set('src', source.Id);
     // Carry the byte size so the player never has to read a Content-Range header
     // off the cross-origin (302->CDN) stream -- that header is not reliably

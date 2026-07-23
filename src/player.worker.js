@@ -22,7 +22,8 @@
 //   eof
 //   log { msg, level }
 
-import { MatroskaDemuxer, FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE } from './demux/matroska.js';
+import { FileSource, HttpSource, TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE } from './demux/matroska.js';
+import { openDemuxer } from './demux/open.js';
 import { buildRemuxer, SUBTITLE_CODECS, audioNote } from './remux/tracks.js';
 import { colourFromTrack, isHdr, parseHvcC, scanAccessUnit, TRANSFER_NAMES, PRIMARY_NAMES } from './demux/hevc.js';
 import { parseVp9Keyframe } from './demux/vp9.js';
@@ -56,7 +57,10 @@ onmessage = async (e) => {
     else if (m.type === 'dispose') dispose();
   } catch (err) {
     log(`worker ${m.type}: ${err.message}`, 'error');
-    if (m.type === 'open' || m.type === 'play') postMessage({ type: 'error', op: m.type, message: err.message });
+    // `code` travels separately: structured clone drops an Error's own
+    // properties, so the main thread would otherwise see the message and nothing
+    // it can branch on. src/player.js needs it to choose the native fallback.
+    if (m.type === 'open' || m.type === 'play') postMessage({ type: 'error', op: m.type, message: err.message, code: err.code });
   }
 };
 
@@ -77,8 +81,12 @@ async function open(input) {
   if (typeof input === 'string') source = await new HttpSource(input).open();
   else if (input && typeof input.url === 'string') source = await new HttpSource(input.url, { size: input.size }).open();
   else source = new FileSource(input);
-  demuxer = await new MatroskaDemuxer(source).parseHeader();
+  // Which container it is comes from the bytes, not the extension or Emby's
+  // Container field -- both lie routinely on a .strm-backed item.
+  demuxer = await openDemuxer(source);
   info = await describe();
+  info.container = demuxer.container;
+  log(`容器：${demuxer.container} · ${info.video.length} 视频 / ${info.audio.length} 音频 / ${info.subtitles.length} 字幕轨`);
   postMessage({ type: 'info', info });
 }
 
@@ -162,6 +170,13 @@ async function fill() {
     }
   } catch (err) {
     log(`fill error: ${err.message}`, 'error');
+    // Until now this was logged and nothing else, so a read that died MID-
+    // PLAYBACK just stopped the loop and the picture froze with no explanation.
+    // A direct object-storage link makes that a routine event rather than a
+    // freak one: a presigned URL expires on a timer (commonly an hour), so a
+    // long film outlives its own source. Report it, and the page can re-open on
+    // another candidate at the same position.
+    postMessage({ type: 'stalled', message: err.message, position: playhead });
   } finally {
     filling = false;
   }

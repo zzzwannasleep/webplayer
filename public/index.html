@@ -257,7 +257,10 @@
   </div>
   <button class="btn" id="pickFile">本地文件…</button>
   <button class="btn ghost" id="pickSub">外挂字幕…</button>
-  <input type="file" id="file" accept=".mkv,.webm,.mp4,.m4v" hidden>
+  <!-- video/* misses .mkv on Windows (no registered MIME), so both are listed.
+       Anything the browser itself can demux plays on the native leg; what
+       neither leg opens is named by Player.hint() rather than left to fail. -->
+  <input type="file" id="file" accept="video/*,.mkv,.m4v,.mov,.m4s" hidden>
   <input type="file" id="extSub" accept=".srt,.vtt,.ass,.ssa" hidden>
 </header>
 
@@ -291,7 +294,7 @@
           <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>
         </svg>
         <b>拖入视频文件，或粘贴一个直链</b>
-        <span>MKV 直接播放，不转码 — HDR、Dolby Vision、特效 ASS 与 PGS 字幕原样保留</span>
+        <span>MKV / MP4 / MOV / WebM / FLV 直接播放，不转码 — 轨道切换、内嵌字幕、HDR 与 Dolby Vision 原样保留<br>其余容器交给浏览器解码兜底</span>
       </div>
     </div>
 
@@ -393,6 +396,23 @@ function explain(e, input) {
   return e.message;
 }
 
+// A pasted URL can be any container, so this page reaches the native <video>
+// leg exactly as the Emby one does (src/player.js#loadNative). Nothing on that
+// leg reads bytes: no tracks, no client-side subtitles, no HDR verdict -- and
+// Anime4K plus the gain stage additionally need the element to have loaded with
+// valid CORS, or the canvas is tainted and createMediaElementSource would
+// silence the video for good. That bit is `nativeCors`.
+const extrasOk = () => !!info && (!info.native || info.nativeCors);
+const NATIVE_WHY = {
+  NOT_MATROSKA: '该地址不是 Matroska 容器，无法重封装，已直接交给浏览器解码',
+  UNKNOWN_CONTAINER: '这个容器 MKV / MP4 / MOV / WebM / FLV 都不是，本地无法拆封装，已交给浏览器解码',
+  FRAGMENTED_MP4: '分片 mp4（moof/mvex）：索引不在 moov 里，无法随机读取，已交给浏览器解码',
+  NOT_MP4: 'mp4 结构读不通（可能被截断），已交给浏览器解码',
+  NOT_FLV: 'FLV 结构读不通，已交给浏览器解码',
+  NO_SIZE: '服务器未告知文件总长度，无法随机读取，已直接交给浏览器解码',
+  NO_RANGE: '服务器不支持 Range 请求，无法随机读取，已直接交给浏览器解码',
+};
+
 function render() {
   $('#placeholder').style.display = 'none';
 
@@ -402,7 +422,10 @@ function render() {
   if (info.dolbyVision) {
     badges.push(`<span class="badge ${info.dolbyVision.playable ? 'b-dv' : 'b-warn'}">Dolby Vision P${info.dolbyVision.profile}</span>`);
   }
-  if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
+  // Native: nothing was demuxed, so nothing was measured -- do not let the SDR
+  // default below claim a colour verdict nobody checked.
+  if (info.native) badges.push('<span class="badge b-warn">原生播放 · 色彩未探测</span>');
+  else if (!badges.length) badges.push('<span class="badge b-ok">SDR</span>');
 
   // Decode path, spelled out: video is always the platform hardware decoder (the
   // whole point of remuxing to MSE), exotic audio the browser refuses falls to our
@@ -411,7 +434,10 @@ function render() {
   const codec = t => t.track.codecId.split('/').pop();
   const vTrack = info.video.find(v => v.supported) || info.video[0];
   const aTrack = info.audio[0];
-  const decode = vTrack ? `<dt>解码</dt><dd>视频 <b>硬件解码</b> · GPU (${codec(vTrack)})`
+  const decode = info.native
+    ? `<dt>解码</dt><dd>整条流交给<b>浏览器原生解码</b>（未经重封装）`
+      + `<br><span class="note" style="margin:0">${NATIVE_WHY[info.nativeReason] || info.nativeReason}</span></dd>`
+    : vTrack ? `<dt>解码</dt><dd>视频 <b>硬件解码</b> · GPU (${codec(vTrack)})`
     + (aTrack ? `<br>音频 ${aTrack.supported ? `<b>浏览器原生</b> (${codec(aTrack)})` : `<b>软件解码</b> · CPU (${codec(aTrack)} → Opus)`}` : '')
     + `</dd>` : '';
 
@@ -419,8 +445,8 @@ function render() {
     <div class="badges">${badges.join('')}</div>
     <dl class="kv">
       <dt>文件</dt><dd>${info.name}</dd>
-      <dt>大小</dt><dd>${fmtBytes(info.size)}</dd>
-      <dt>时长</dt><dd>${fmtTime(info.duration)}</dd>
+      ${info.size ? `<dt>大小</dt><dd>${fmtBytes(info.size)}</dd>` : ''}
+      <dt>时长</dt><dd>${info.duration ? fmtTime(info.duration) : '未知'}</dd>
       ${info.hdr ? `<dt>色彩</dt><dd>${info.hdr.primaries} · ${info.hdr.bitDepth}-bit</dd>` : ''}
       ${info.mastering ? `<dt>母版</dt><dd>${(info.mastering.maxLuminance / 10000).toFixed(0)} nits 峰值</dd>` : ''}
       ${info.cll ? `<dt>亮度</dt><dd>MaxCLL ${info.cll.maxCLL} · MaxFALL ${info.cll.maxFALL}</dd>` : ''}
@@ -440,8 +466,9 @@ function render() {
     player.log(`${a.note.name}: ${a.note.reason} ${a.note.route}`, 'warn');
     if (a.note.downmix) player.log(a.note.downmix, 'warn');
   }
-  // Nothing outside the frame to press: loading a file starts it.
-  if (info.video.some(v => v.supported)) start();
+  // Nothing outside the frame to press: loading a file starts it. The native leg
+  // is already holding the stream, so start() only has the shared tail to run.
+  if (info.native || info.video.some(v => v.supported)) start();
   else player.log('没有可播放的视频轨', 'error');
 }
 
@@ -463,7 +490,15 @@ const trackName = (x, i) => x.label || `轨道 ${i + 1}`;
 function buildGroups() {
   const A4K_NAMES = { off: '关闭', A: 'Mode A · 通用', B: 'Mode B · 柔化', C: 'Mode C · 去噪' };
   return [
-    info && {
+    // Native playback exposes no track list: the browser chose, and there is no
+    // demuxer to switch with. State that where the picker would have been.
+    info?.native && {
+      key: 'native', label: '播放方式', value: info.nativeCors ? '原生' : '原生 · 受限',
+      rows: [{ type: 'note', text: (NATIVE_WHY[info.nativeReason] || '已回退到原生播放。')
+        + '轨道切换、内嵌 ASS/PGS 字幕与 HDR 判定在这条通路上不可用。'
+        + (info.nativeCors ? '' : ' 该地址未放行跨域凭证，画面无法读回，超分与增益已一并停用。') }],
+    },
+    info && !info.native && {
       key: 'track', label: '轨道',
       value: [info.audio[CHOICE.audio] && trackName(info.audio[CHOICE.audio], CHOICE.audio),
               CHOICE.sub >= 0 ? trackName(info.subtitles[CHOICE.sub], CHOICE.sub) : '无字幕'].filter(Boolean).join(' · '),
@@ -487,7 +522,7 @@ function buildGroups() {
     // video.volume stops at 1.0. This is where that gets made up -- but only on
     // request: routing through WebAudio drifts the audio clock, so the default
     // is native playback and the viewer opts in when a film is too quiet.
-    info && volume.ok && {
+    info && volume.ok && extrasOk() && {
       key: 'gain', label: '响度', value: { 1: '原始', auto: '自动增益' }[CHOICE.gain] || `+${CHOICE.gain}×`,
       rows: [
         { type: 'select', id: 'gain', label: '增益', value: CHOICE.gain,
@@ -504,7 +539,7 @@ function buildGroups() {
     },
     // SDR only: Anime4K renders through a WebGPU canvas, which cannot hold PQ, so
     // HDR/DoVi keep the direct MSE path and the option is simply not offered.
-    info && Anime4K.supported && !info.hdr && !info.dolbyVision && {
+    info && Anime4K.supported && extrasOk() && !info.hdr && !info.dolbyVision && {
       key: 'a4k', label: '超分', value: A4K_NAMES[a4kMode],
       rows: [
         { type: 'select', id: 'a4k', label: '动画超分 Anime4K', value: a4kMode,
@@ -576,10 +611,11 @@ async function start() {
     // suspended context means silence rather than an error.
     await volume.resume().catch(() => {});
     await video.play().catch(e => player.log(`自动播放被拦截，按空格开始: ${e.message}`, 'warn'));
-    if (wanted >= 0) await applySubtitle(wanted);
+    if (wanted >= 0 && info.subtitles.length) await applySubtitle(wanted);
     // Resume the upscaler only when the new file is SDR (the row is not even
     // offered for HDR/DoVi); the choice otherwise waits for the next SDR file.
-    if (a4kMode !== 'off' && Anime4K.supported && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
+    // extrasOk() additionally holds it back on a tainted native element.
+    if (a4kMode !== 'off' && Anime4K.supported && extrasOk() && !info.hdr && !info.dolbyVision) await applyAnime4K(a4kMode);
   } catch (e) {
     player.log(e.message, 'error');
     console.error(e);
