@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>LinWeb · 播放</title>
 <!-- one icon: Edge/Chrome lighten a dark monochrome favicon themselves on a dark
      tab strip (verified on the real strip), so a media-switched white twin would
@@ -225,6 +225,7 @@ import { VolumeStage } from '../src/audio/gain.js';
 import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
 import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
+import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
 import { DanmakuLayer, loadRenderer, source, parseAny, loadSettings, saveSettings, loadTrack, saveTrack, forgetTrack } from '../src/danmaku/index.js';
 
 const $ = s => document.querySelector(s);
@@ -445,7 +446,7 @@ const NATIVE_WHY = {
 // current value, each opening into its own controls. Choices live HERE, in
 // CHOICE, not in the DOM -- a control inside a closed panel does not exist.
 const menu = new SettingsMenu($('#picks'));
-document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() }));
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() }));
 
 const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
 const label = (x, i) => x.label || `轨道 ${i + 1}`;
@@ -880,7 +881,10 @@ function paintProgress() {
 $('#backBtn').addEventListener('click', e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
 const togglePlay = () => video.paused ? video.play().catch(() => {}) : video.pause();
 $('#ppBtn').addEventListener('click', togglePlay);
-video.addEventListener('click', togglePlay);
+// Mouse only. On touch a tap has to reveal the controls first -- play/pause is
+// the centre double-tap there (src/ui/touch.js), because a viewer who cannot
+// see the bar has no other way to summon it.
+video.addEventListener('click', e => { if (e.pointerType !== 'touch') togglePlay(); });
 const ICON_PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 14 9-14 9z"/></svg>`, ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
 const ICON_VOL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.7 5.3a9 9 0 0 1 0 13.4"/></svg>`, ICON_MUTE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7 6.4 9H3v6h3.4l4.6 4.3z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`;
 const ICON_FULL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`, ICON_EXIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`;
@@ -929,11 +933,11 @@ document.addEventListener('keydown', e => {
 });
 const menuOpen = () => !picks.hidden;
 
-document.addEventListener('fullscreenchange', () => { $('#fsBtn').innerHTML = document.fullscreenElement ? ICON_EXIT : ICON_FULL; });
-$('#fsBtn').addEventListener('click', () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else stage.requestFullscreen().catch(e => player.log(`全屏失败: ${e.message}`, 'warn'));
-});
+// The stage goes fullscreen, not the <video> -- see src/ui/touch.js for why.
+// Also asks for landscape on a phone.
+const paintFs = () => { $('#fsBtn').innerHTML = fs.active() ? ICON_EXIT : ICON_FULL; };
+const fs = fullscreen(stage, { log: (m, l) => player.log(m, l), onChange: paintFs });
+$('#fsBtn').addEventListener('click', () => fs.toggle());
 
 let idleTimer = null;
 const wake = () => {
@@ -941,10 +945,13 @@ const wake = () => {
   clearTimeout(idleTimer);
   if (!video.paused && !menuOpen()) idleTimer = setTimeout(() => stage.classList.add('idle'), 3000);
 };
-stage.addEventListener('pointermove', wake);
-stage.addEventListener('pointerleave', () => { if (!video.paused && !menuOpen()) stage.classList.add('idle'); });
+stage.addEventListener('pointermove', e => { if (e.pointerType !== 'touch') wake(); });
+stage.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch' && !video.paused && !menuOpen()) stage.classList.add('idle'); });
 video.addEventListener('pause', wake);
 video.addEventListener('play', wake);
+// Exported like `player` and `subs` below: the volume probe's verdict is not
+// observable any other way, and tools/test-touch.mjs asserts on it.
+window.touch = attachTouch(stage, video, { onWake: wake, onTogglePlay: togglePlay, log: (m, l) => player.log(m, l) });
 
 addEventListener('keydown', e => {
   const t = e.target;

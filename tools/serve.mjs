@@ -2,9 +2,14 @@
 // the test files are 300MB..21GB and the player seeks by byte offset.
 import { createServer } from 'node:http';
 import { createReadStream, statSync, writeFileSync, existsSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { extname, join, normalize, resolve } from 'node:path';
 
-const ROOT = process.argv[2] ?? process.cwd();
+// resolve(), not the argument as given: the containment check below compares
+// against join()'s output, which on Windows uses backslashes. Passing a root
+// with forward slashes (or a trailing separator) therefore failed that compare
+// for EVERY request, and the whole site answered "forbidden" -- a path bug
+// wearing a permissions error's clothes.
+const ROOT = resolve(process.argv[2] ?? process.cwd());
 const PORT = Number(process.env.PORT ?? 8080);
 
 const MIME = {

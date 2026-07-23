@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>LinWeb · Emby</title>
 <!-- one icon: Edge/Chrome lighten a dark monochrome favicon themselves on a dark
      tab strip (verified on the real strip), so a media-switched white twin would
@@ -16,6 +16,10 @@
     --hover:rgba(255,255,255,.05);--surface:rgba(255,255,255,.07);--surface-2:rgba(255,255,255,.12);--sel:rgba(255,255,255,.09);
     --ease:cubic-bezier(.34,1.4,.5,1);--ease-out:cubic-bezier(.2,.7,.3,1);
     --sans:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    /* The page gutter, in one place because eleven rules have to agree on it --
+       the hero, every rail, every grid and both detail panes. The phone block
+       at the bottom of this sheet is what it exists for. */
+    --pad:48px;
   }
   :root[data-theme=light]{
     color-scheme:light;
@@ -35,7 +39,7 @@
   a{color:inherit;text-decoration:none}
   ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--surface-2);border-radius:9px}
 
-  #app{display:grid;grid-template-columns:68px 1fr;height:100vh}
+  #app{display:grid;grid-template-columns:68px 1fr;height:100dvh}
   #app.hidden{display:none}
   #rail{background:linear-gradient(180deg,var(--ink-2),var(--ink));border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 0;z-index:40}
   .brand{width:38px;height:38px;border-radius:11px;margin-bottom:12px;background:linear-gradient(140deg,var(--ink-3),var(--ink-2));border:1px solid var(--line-2);display:grid;place-items:center;color:var(--fg);font-weight:800;cursor:pointer}
@@ -77,7 +81,7 @@
   @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
   /* hero */
-  #hero{position:relative;height:64vh;min-height:440px;display:flex;align-items:flex-end;padding:0 48px 40px;margin-top:-72px;overflow:hidden}
+  #hero{position:relative;height:64vh;min-height:440px;display:flex;align-items:flex-end;padding:0 var(--pad) 40px;margin-top:-72px;overflow:hidden}
   #hero .bg{position:absolute;inset:0;z-index:-2;background-size:cover;background-position:center;transition:opacity .8s}
   #hero::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(var(--bg-rgb),.92),rgba(var(--bg-rgb),.4) 45%,transparent 72%),linear-gradient(0deg,var(--ink) 4%,transparent 60%)}
   .hero-inner{max-width:620px}
@@ -98,15 +102,25 @@
   /* rails */
   #rails{padding:8px 0 60px;margin-top:-30px;position:relative;z-index:2}
   .rail{margin:30px 0}
-  .rail-head{display:flex;align-items:baseline;gap:12px;padding:0 48px;margin-bottom:12px}
+  .rail-head{display:flex;align-items:baseline;gap:12px;padding:0 var(--pad);margin-bottom:12px}
   .rail-head h2{font-size:19px;font-weight:700;margin:0}
-  .track{display:flex;gap:16px;overflow-x:auto;overflow-y:hidden;padding:24px 48px 28px;margin:-16px 0;scroll-snap-type:x proximity}
+  /* scroll-padding, not just padding: a `start`-aligned snap target lines up
+     with the scrollport edge, so without this the first card in every rail
+     snaps flush to the screen edge and eats its own gutter. */
+  .track{display:flex;gap:16px;overflow-x:auto;overflow-y:hidden;padding:24px var(--pad) 28px;scroll-padding-left:var(--pad);margin:-16px 0;scroll-snap-type:x proximity}
   .track::-webkit-scrollbar{height:0}.track:hover::-webkit-scrollbar{height:6px}
-  .card{flex:0 0 auto;scroll-snap-align:start;cursor:pointer;transition:transform .3s var(--ease)}
-  .card:hover{transform:translateY(-10px) scale(1.04);z-index:5}
-  .poster{width:150px;aspect-ratio:2/3;border-radius:14px;background-size:cover;background-position:center;position:relative;box-shadow:0 8px 24px -12px #000;border:1px solid var(--surface);overflow:hidden}
-  .card:hover .poster{box-shadow:0 26px 50px -16px #000c,0 0 0 1px var(--accent)}
-  .land .poster{width:300px;aspect-ratio:16/9}
+  /* One width for the poster and the two lines of text under it, so a phone
+     only has to override --pw. */
+  .card{flex:0 0 auto;scroll-snap-align:start;cursor:pointer;transition:transform .3s var(--ease);--pw:150px}
+  .card.land{--pw:300px}
+  .poster{width:var(--pw);aspect-ratio:2/3;border-radius:14px;background-size:cover;background-position:center;position:relative;box-shadow:0 8px 24px -12px #000;border:1px solid var(--surface);overflow:hidden}
+  .land .poster{width:var(--pw);aspect-ratio:16/9}
+  /* Hover lifts are a mouse idiom: on touch the :hover state latches after a
+     tap and the card stays raised until you tap something else. */
+  @media (hover:hover){
+    .card:hover{transform:translateY(-10px) scale(1.04);z-index:5}
+    .card:hover .poster{box-shadow:0 26px 50px -16px #000c,0 0 0 1px var(--accent)}
+  }
   .cmore{position:absolute;top:7px;right:7px;width:28px;height:28px;border-radius:9px;border:0;z-index:3;
           background:rgba(0,0,0,.62);color:#fff;display:grid;place-items:center;font-size:16px;line-height:1;
           cursor:pointer;opacity:0;transition:opacity .16s,background .16s;backdrop-filter:blur(6px)}
@@ -115,35 +129,34 @@
   @media (hover:none){.cmore{opacity:1}}
   .pw{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.5)}
   .pw i{display:block;height:100%;background:var(--accent)}
-  .ctitle{font-size:13px;font-weight:600;margin-top:9px;width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .land .ctitle{width:300px}
+  .ctitle{font-size:13px;font-weight:600;margin-top:9px;width:var(--pw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .csub{font-size:12px;color:var(--fg-mute);margin-top:2px}
 
   /* library cards + grid */
-  .page-head{padding:32px 48px 0;display:flex;align-items:center;gap:20px}
+  .page-head{padding:32px var(--pad) 0;display:flex;align-items:center;gap:20px}
   .page-title{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:0}
   .page-title .cnt{font-size:15px;color:var(--fg-mute);font-weight:500;margin-left:10px}
   .backbtn{font-size:14px;font-weight:600;color:var(--fg-dim);padding:8px 12px;border-radius:10px}
   .backbtn:hover{color:var(--fg);background:var(--hover)}
-  .libcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;padding:24px 48px 80px}
+  .libcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;padding:24px var(--pad) 80px}
   .libcard{position:relative;aspect-ratio:16/9;border-radius:16px;overflow:hidden;cursor:pointer;border:1px solid var(--line);background-size:cover;background-position:center;transition:transform .3s var(--ease)}
-  .libcard:hover{transform:translateY(-6px) scale(1.015);border-color:var(--line-2)}
+  @media (hover:hover){.libcard:hover{transform:translateY(-6px) scale(1.015);border-color:var(--line-2)}}
   .libcard::after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,.1) 55%,rgba(0,0,0,.4))}
   .libcard .lx{position:absolute;left:18px;right:18px;bottom:15px;z-index:2}
   .libcard .ln{font-size:22px;font-weight:800;color:#fff;text-shadow:0 2px 14px rgba(0,0,0,.6)}
   .libcard .lc{font-size:13px;color:rgba(255,255,255,.82);margin-top:3px}
-  .chips{display:flex;gap:9px;overflow-x:auto;padding:14px 48px 4px}.chips::-webkit-scrollbar{height:0}
+  .chips{display:flex;gap:9px;overflow-x:auto;padding:14px var(--pad) 4px}.chips::-webkit-scrollbar{height:0}
   .gchip{flex:0 0 auto;font-size:13px;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--fg-dim);cursor:pointer;transition:.2s;white-space:nowrap}
   .gchip:hover{color:var(--fg)}.gchip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px 18px;padding:22px 48px 70px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px 18px;padding:22px var(--pad) 70px}
   .gcell{cursor:pointer;transition:transform .3s var(--ease)}
-  .gcell:hover{transform:translateY(-8px) scale(1.03);z-index:2;position:relative}
+  @media (hover:hover){.gcell:hover{transform:translateY(-8px) scale(1.03);z-index:2;position:relative}}
   .gcell .poster{width:100%}
   .gcell .gt{font-size:13.5px;font-weight:600;margin-top:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gcell .gs{font-size:12px;color:var(--fg-mute);margin-top:2px}
   .sk .poster{background:linear-gradient(100deg,var(--ink-2) 30%,var(--ink-3) 50%,var(--ink-2) 70%);background-size:200% 100%;animation:sh 1.3s infinite}
   @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
-  .empty{padding:60px 48px;color:var(--fg-mute);text-align:center}
+  .empty{padding:60px var(--pad);color:var(--fg-mute);text-align:center}
 
   /* detail */
   #detail{position:fixed;inset:0;z-index:60;background:var(--ink);opacity:0;pointer-events:none;transition:opacity .4s var(--ease-out)}
@@ -155,14 +168,14 @@
   .dhero{position:relative;min-height:70vh;display:flex;align-items:flex-end;overflow:hidden}
   .dhero .bg{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center}
   .dhero::after{content:"";position:absolute;inset:0;z-index:1;background:linear-gradient(0deg,var(--ink) 2%,rgba(var(--bg-rgb),.5) 40%,rgba(var(--bg-rgb),0) 74%),linear-gradient(90deg,rgba(var(--bg-rgb),.7),transparent 62%)}
-  .dhead{position:relative;z-index:2;width:100%;padding:0 48px 44px}
+  .dhead{position:relative;z-index:2;width:100%;padding:0 var(--pad) 44px}
   .dtitle{font-size:clamp(38px,5.4vw,72px);font-weight:800;letter-spacing:-.03em;line-height:.95;margin:0 0 14px;max-width:16ch;text-wrap:balance;text-shadow:0 2px 40px rgba(0,0,0,.4)}
   .dtag{color:var(--fg-dim);font-size:16px;margin-bottom:14px;max-width:60ch}
   .dmeta{display:flex;align-items:center;gap:13px;flex-wrap:wrap;color:var(--fg-dim);font-size:14.5px;font-weight:500}
   .dmeta .q{border:1px solid var(--line-2);border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700;color:var(--fg)}
   .rating{color:var(--fg);font-weight:700}
   .dactions{display:flex;align-items:center;gap:12px;margin-top:26px;flex-wrap:wrap}
-  .dbody{padding:40px 48px 96px}
+  .dbody{padding:40px var(--pad) 96px}
   .dsec{margin-bottom:44px}
   .dsec>h3{font-size:19px;font-weight:700;margin:0 0 20px}
   .ov{color:var(--fg-dim);line-height:1.75;font-size:16px;max-width:80ch;margin:0}
@@ -258,7 +271,7 @@
   #ctx .grp{padding:9px 11px 4px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700}
 
   /* ---- admin dashboard ---- */
-  .adm{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;padding:22px 48px 80px;align-items:start}
+  .adm{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;padding:22px var(--pad) 80px;align-items:start}
   .acard{background:var(--ink-2);border:1px solid var(--line);border-radius:16px;padding:16px 18px 14px}
   .acard.wide{grid-column:1/-1}
   .ahead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
@@ -309,6 +322,173 @@
   #toast.err{border-color:#5a2a34;color:#ffc9d0}
   @media (max-width:820px){.ep{grid-template-columns:120px 1fr}.epthumb{width:120px}.ep .ert{display:none}.search{width:auto}}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+  /* ======================================================================
+     PHONE
+     Emby's own web client ships no phone layout at all ("it does not
+     currently have any mobile designs" -- their docs), and Jellyfin, which
+     forked it, answers with an off-canvas drawer you have to swipe out from
+     the left edge. Both put navigation where a thumb cannot reach and neither
+     has gestures. So this is not a squeeze of the desktop layout:
+
+       * the 68px rail becomes a labelled bottom tab bar, in the thumb zone,
+         always visible -- no drawer to summon
+       * the top bar hides itself as you scroll down and comes back the moment
+         you scroll up, so the artwork gets the whole screen
+       * the search collapses to its icon and takes the row when focused
+       * every centred dialog becomes a bottom sheet
+       * long-press replaces right-click for the card menu (see the script)
+
+     One breakpoint, not Jellyfin's thirteen: below 760px the layout is a
+     different shape, above it the desktop one already works.
+     ====================================================================== */
+  @media (max-width:760px){
+    :root{--pad:16px}
+
+    /* --- shell: rail moves to the bottom edge --- */
+    #app{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
+    #rail{
+      grid-row:2;flex-direction:row;justify-content:space-around;align-items:stretch;
+      gap:0;padding:6px 4px calc(4px + env(safe-area-inset-bottom));
+      border-right:0;border-top:1px solid var(--line);
+      background:rgba(var(--bg-rgb),.93);backdrop-filter:blur(18px);
+    }
+    .brand,.rail-sp{display:none}
+    .navbtn,.avatar{
+      width:auto;flex:1;min-width:0;height:auto;min-height:48px;border-radius:12px;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      margin:0;padding:5px 2px;
+    }
+    .navbtn svg{width:22px;height:22px;flex:0 0 auto}
+    /* The label is the button's own tooltip -- no second copy to keep in sync. */
+    .navbtn::after,.avatar::after{
+      content:attr(title);font-size:10px;font-weight:600;line-height:1;
+      max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    /* Until a server icon loads the avatar has nothing to draw, and on a tab bar
+       an invisible tab is an unusable one -- so it keeps a placeholder disc that
+       the icon replaces. `title` is "账户 / 退出", too long for a 76px tab. */
+    .avatar{overflow:visible;background:none;border:0}
+    .avatar::before{content:'';width:22px;height:22px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line-2);flex:0 0 auto}
+    .avatar.has-icon::before{display:none}
+    .avatar::after{content:'账户';color:var(--fg-mute)}
+    .avatar img{position:static;width:22px;height:22px;border-radius:50%}
+    /* The desktop selection marker is a bar off the rail's left edge; here it
+       belongs over the icon. */
+    .navbtn.on::before{left:50%;top:2px;transform:translateX(-50%);width:18px;height:3px}
+
+    /* --- top bar: gets out of the way while you scroll --- */
+    #topbar{
+      padding:10px var(--pad);padding-top:calc(10px + env(safe-area-inset-top));gap:10px;
+      transition:transform .26s var(--ease-out),background .3s;
+    }
+    #view.hide-bar #topbar{transform:translateY(-100%)}
+    #serverPill{display:none}
+    .crumbs{font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .search{width:44px;height:42px;flex:0 0 auto;padding:0;justify-content:center;overflow:hidden;transition:width .22s var(--ease-out)}
+    /* flex:0 0 0, not width:0 -- the base rule's flex-grow would otherwise pull
+       the field back open and leave a clipped word next to the magnifier. */
+    .search input{flex:0 0 0;width:0;padding:0;font-size:16px}   /* 16px: below that iOS zooms the page on focus */
+    .search:focus-within{width:auto;flex:1 1 auto;padding:0 12px;justify-content:flex-start}
+    .search:focus-within input{flex:1 1 auto;width:auto}
+
+    /* --- hero: the desktop fade runs left-to-right, which in portrait leaves
+           the title sitting on the bright part of the artwork --- */
+    #hero{height:auto;min-height:52dvh;padding:0 var(--pad) 22px;margin-top:-56px}
+    #hero::after{background:linear-gradient(0deg,var(--ink) 5%,rgba(var(--bg-rgb),.55) 42%,rgba(var(--bg-rgb),.15) 78%)}
+    .hero-inner{max-width:none;width:100%}
+    .hero-title{font-size:clamp(26px,7.6vw,42px);margin-bottom:10px}
+    .hero-meta{font-size:13px;gap:9px;margin-bottom:10px}
+    .hero-desc{font-size:13.5px;-webkit-line-clamp:2;margin-bottom:16px}
+    .btn-row{gap:10px}
+    .btn.play{flex:1;justify-content:center}
+
+    /* --- rails and grids --- */
+    #rails{margin-top:-18px}
+    .rail{margin:22px 0}
+    .rail-head h2{font-size:17px}
+    .track{gap:12px;padding:18px var(--pad) 22px}
+    .card{--pw:clamp(104px,30vw,150px)}
+    .card.land{--pw:clamp(196px,62vw,300px)}
+    .ctitle{font-size:12.5px;margin-top:7px}
+    /* Three posters and a sliver of the fourth: enough to read a title, enough
+       to show the row keeps going. Jellyfin gives a phone two. */
+    .grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px 10px;padding:16px var(--pad) 34px}
+    .gcell .gt{font-size:12px;margin-top:7px}
+    .gcell .gs{font-size:11px}
+    .libcards{grid-template-columns:minmax(0,1fr);gap:12px;padding:16px var(--pad) 34px}
+    .libcard .ln{font-size:19px}
+    .page-head{padding:20px var(--pad) 0;gap:12px}
+    .page-title{font-size:24px}
+    .chips{padding:12px var(--pad) 4px;gap:8px}
+    .gchip,.stab{padding:10px 15px;font-size:13px}    /* 40px tall, thumb-sized */
+
+    /* --- detail --- */
+    .dhero{min-height:58dvh}
+    .dhero::after{background:linear-gradient(0deg,var(--ink) 3%,rgba(var(--bg-rgb),.6) 44%,rgba(var(--bg-rgb),.1) 80%)}
+    .dhead{padding:0 var(--pad) 26px}
+    .dtitle{font-size:clamp(27px,7.8vw,46px);max-width:none;margin-bottom:10px}
+    .dtag{font-size:14px;margin-bottom:10px}
+    .dmeta{font-size:13px;gap:10px}
+    .dactions{margin-top:18px;gap:10px}
+    .dbody{padding:26px var(--pad) 100px}
+    .dsec{margin-bottom:32px}
+    .dsec>h3{font-size:17px;margin-bottom:14px}
+    .ov{font-size:14.5px;line-height:1.7}
+    .dclose{top:calc(12px + env(safe-area-inset-top));right:14px;width:44px;height:44px}
+    .castc,.castc .cav{width:88px}.castc .cav{height:88px}
+    .ep{grid-template-columns:104px 1fr;gap:12px;padding:12px 4px}
+    .epthumb{width:104px}
+    .ep .et{font-size:14px}
+    .ep .eo{font-size:12px;-webkit-line-clamp:2}
+
+    /* --- admin: minmax(360px,...) is wider than the screen, so the whole
+           dashboard scrolled sideways --- */
+    .adm{grid-template-columns:minmax(0,1fr);padding:16px var(--pad) 34px}
+    .akv{grid-template-columns:minmax(0,1fr);gap:1px 0}
+    .akv dt{margin-top:7px}
+
+    /* --- every centred dialog becomes a bottom sheet --- */
+    #preplay,#dlg{place-items:end center;padding:0}
+    .ppbox,.dlgbox{
+      width:100%;max-width:none;border-radius:20px 20px 0 0;border-width:1px 0 0;
+      max-height:88dvh;animation:sheet-up .26s var(--ease-out);
+    }
+    .ppbox{padding-bottom:env(safe-area-inset-bottom)}
+    .dlgbox{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
+    .ppfoot{padding:16px 20px calc(20px + env(safe-area-inset-bottom))}
+    .pphead{padding:18px 20px 6px}.ppbody{padding:12px 20px 6px}
+    .ppnote{font-size:11.5px}
+    .chz .opts{gap:7px}
+    .chopt{padding:11px 15px}
+    .fld input,.fld textarea,.fld select,.lfield input{font-size:16px;padding:11px 12px}
+    .dlgfoot .btn{flex:1;justify-content:center}
+
+    /* --- card menu: a sheet too, because it is reached by long-press and a
+           popup anchored to a fingertip would sit under the finger --- */
+    #ctx{
+      left:0!important;right:0!important;top:auto!important;bottom:0!important;
+      min-width:0;max-width:none;width:100%;border-radius:20px 20px 0 0;border-width:1px 0 0;
+      padding:8px 8px calc(10px + env(safe-area-inset-bottom));
+    }
+    #ctx.open{animation:sheet-up .22s var(--ease-out)}
+    #ctx .ci{padding:13px 14px;font-size:15px}
+    #ctx .chead{padding:10px 14px;font-size:12.5px}
+
+    /* --- login --- */
+    .lbox{padding:26px 20px;margin:0 14px;width:auto;max-height:92dvh;overflow:auto}
+    #toast{left:14px;right:14px;transform:translateY(20px);bottom:calc(84px + env(safe-area-inset-bottom));text-align:center}
+    #toast.show{transform:none}
+  }
+  @keyframes sheet-up{from{transform:translateY(100%)}to{transform:none}}
+
+  /* The overlay button on a card is hover-revealed on the desktop; on touch it
+     is already forced visible above, but 28px is below every platform's tap
+     minimum (44 Apple, 48 Material). */
+  @media (pointer:coarse){
+    .cmore{width:38px;height:38px;font-size:19px;top:5px;right:5px}
+    .navbtn:hover,.backbtn:hover,.abtn:hover{background:none}
+  }
 </style>
 
 <!-- login -->
@@ -820,6 +1000,34 @@ document.addEventListener('click', e => {
   const r = m.getBoundingClientRect();
   openCtx(r.right - 4, r.bottom + 6, it);
 }, true);
+// Long-press is right-click's twin on a touch screen. The ⋯ button already made
+// the menu reachable, but reaching for a 38px target in a poster's corner is not
+// how anyone actually uses a phone -- press the card itself and hold.
+(function longPressCtx(){
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch' || !EM) return;
+    const el = e.target.closest?.('[data-open],[data-resume],[data-ep],[data-lib]');
+    if (!el || e.target.closest('.cmore')) return;
+    sx = e.clientX; sy = e.clientY; fired = false;
+    const { clientX, clientY } = e;
+    timer = setTimeout(() => {
+      const it = CACHE.get(el.dataset.open || el.dataset.resume || el.dataset.ep || el.dataset.lib);
+      if (!it) return;
+      fired = true;
+      navigator.vibrate?.(12);
+      openCtx(clientX, clientY, it);
+    }, 500);
+  }, true);
+  document.addEventListener('pointermove', e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 12) cancel(); }, true);
+  addEventListener('pointerup', cancel, true);
+  addEventListener('pointercancel', cancel, true);
+  addEventListener('scroll', cancel, true);
+  // The finger lifting off a long press still produces a click, and that click
+  // would open the item behind the menu we just opened.
+  document.addEventListener('click', e => { if (fired) { fired = false; e.preventDefault(); e.stopPropagation(); } }, true);
+})();
 document.addEventListener('click', e => { if (!CTX.contains(e.target)) closeCtx(); });
 // Scrolling closes the menu (it is position:fixed and would drift off its card),
 // but NOT the scroll the browser itself performs to bring the clicked ⋯ button
@@ -1120,7 +1328,19 @@ function go(view){
 }
 document.querySelectorAll('#rail .navbtn[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
 $('#brandBtn').onclick = () => go('home');
-$('#view').addEventListener('scroll', ()=> $('#view').classList.toggle('scrolled', $('#view').scrollTop>40));
+// Scrolling down surrenders the top bar to the artwork and scrolling up brings
+// it straight back -- the phone's screen is short and the bar is 62px of it.
+// Only below the hero, and never out from under an open search field.
+let lastScrollY = 0;
+$('#view').addEventListener('scroll', () => {
+  const v = $('#view'), y = v.scrollTop;
+  v.classList.toggle('scrolled', y > 40);
+  v.classList.toggle('hide-bar', y > 180 && y > lastScrollY && !$('.search').matches(':focus-within'));
+  lastScrollY = y;
+});
+// The collapsed search is 44px of icon with a zero-width field inside it, so the
+// tap has to be handed on to the input that the CSS then expands.
+$('.search').addEventListener('click', () => $('#topSearch').focus());
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); if (DLG.classList.contains('open')) closeDlg(); else { closePreplay(); closeDetail(); } } });
 
 // ---------- errors ----------
