@@ -292,13 +292,22 @@ export class EmbyClient {
 
   views() { return this._get(`/Users/${this.userId}/Views`).then(r => r.Items || []); }
 
-  items(opts = {}) {
+  // The Items envelope, unwrapped. items() returns just the array (most callers
+  // only want that); itemsPage() keeps TotalRecordCount for the library page's
+  // count + pagination. Both funnel through here so the param map lives once.
+  _items(opts = {}) {
     return this._get(`/Users/${this.userId}/Items`, {
       ParentId: opts.parentId, IncludeItemTypes: opts.types, Recursive: opts.recursive ?? true,
       SortBy: opts.sortBy || 'SortName', SortOrder: opts.sortOrder || 'Ascending',
       Fields: opts.fields || EmbyClient.FIELDS, StartIndex: opts.start, Limit: opts.limit,
       Filters: opts.filters, Genres: opts.genre, SearchTerm: opts.search,
-    }).then(r => r.Items || []);
+      // extra library filters (each is a separate Emby query param, not a Filters value)
+      IsHD: opts.ishd, Is4K: opts.is4k, HasSubtitles: opts.hasSubtitles,
+    });
+  }
+  items(opts = {}) { return this._items(opts).then(r => r.Items || []); }
+  itemsPage(opts = {}) {
+    return this._items(opts).then(r => ({ items: r.Items || [], total: r.TotalRecordCount ?? (r.Items || []).length }));
   }
   item(id) { return this._get(`/Users/${this.userId}/Items/${id}`, { Fields: EmbyClient.FIELDS }); }
 

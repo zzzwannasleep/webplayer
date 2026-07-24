@@ -148,7 +148,29 @@
   .chips{display:flex;gap:9px;overflow-x:auto;padding:14px var(--pad) 4px}.chips::-webkit-scrollbar{height:0}
   .gchip{flex:0 0 auto;font-size:13px;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--fg-dim);cursor:pointer;transition:.2s;white-space:nowrap}
   .gchip:hover{color:var(--fg)}.gchip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px 18px;padding:22px var(--pad) 70px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--gmin,160px),1fr));gap:22px 18px;padding:22px var(--pad) 28px}
+  #searchGrid{padding-bottom:70px}
+  .libmore{min-height:20px;padding:0 var(--pad) 70px;display:flex;justify-content:center}
+  .libmore .sp{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--line-2);border-top-color:var(--fg-dim);animation:spin .7s linear infinite;margin:14px 0}
+  .libmore .end{color:var(--fg-mute);font-size:12.5px;padding:12px 0}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* library toolbar: sort / filter / density, top-right of the page head */
+  .libtools{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
+  .tbtn{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--fg-dim);padding:8px 13px;border-radius:10px;border:1px solid var(--line);background:var(--surface);transition:.2s;white-space:nowrap}
+  .tbtn:hover{color:var(--fg);border-color:var(--line-2)}
+  .tbtn.act{color:var(--fg);border-color:var(--line-2);background:var(--surface-2)}
+  .tbtn.ico{padding:8px 11px}
+  .fdot{min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:10.5px;font-weight:800;display:none;place-items:center}
+  .fdot.on{display:grid}
+  /* shared popover — same look as #ctx, reused for sort + filter menus */
+  #pop{position:fixed;z-index:200;min-width:200px;max-width:280px;background:var(--ink-3);border:1px solid var(--line-2);border-radius:13px;padding:6px;box-shadow:0 26px 64px -20px #000,0 0 0 1px rgba(0,0,0,.35);display:none}
+  #pop.open{display:block;animation:pop .14s var(--ease-out)}
+  #pop .ci{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:9px;font-size:13.5px;cursor:pointer;white-space:nowrap;color:var(--fg)}
+  #pop .ci:hover{background:var(--hover)}
+  #pop .ci .k{width:17px;text-align:center;opacity:.85;font-size:12px;flex:0 0 auto}
+  #pop .ci .on{margin-left:auto;color:var(--good);font-size:12px}
+  #pop .grp{padding:9px 11px 4px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700}
+  #pop .sep{height:1px;background:var(--line);margin:5px 9px}
   .gcell{cursor:pointer;transition:transform .3s var(--ease)}
   @media (hover:hover){.gcell:hover{transform:translateY(-8px) scale(1.03);z-index:2;position:relative}}
   .gcell .poster{width:100%}
@@ -418,8 +440,13 @@
     .gcell .gs{font-size:11px}
     .libcards{grid-template-columns:minmax(0,1fr);gap:12px;padding:16px var(--pad) 34px}
     .libcard .ln{font-size:19px}
-    .page-head{padding:20px var(--pad) 0;gap:12px}
+    .page-head{padding:20px var(--pad) 0;gap:10px 12px;flex-wrap:wrap}
     .page-title{font-size:24px}
+    /* toolbar drops to its own full-width row; density is desktop-only (mobile
+       grid is a fixed 3 columns below, so the control would be a no-op) */
+    .libtools{width:100%;margin:6px 0 0}
+    .libtools .tbtn{flex:1;justify-content:center;padding:11px 10px}
+    #libDensity{display:none}
     .chips{padding:12px var(--pad) 4px;gap:8px}
     .gchip,.stab{padding:10px 15px;font-size:13px}    /* 40px tall, thumb-sized */
 
@@ -542,9 +569,15 @@
       <div id="libLanding"><div class="page-head"><h1 class="page-title">媒体库 <span class="cnt num" id="libTotal"></span></h1></div>
         <div class="libcards" id="libCards"></div></div>
       <div id="libDetail" style="display:none">
-        <div class="page-head"><button class="backbtn" id="libBack">‹ 媒体库</button><h1 class="page-title" id="libDName"></h1></div>
+        <div class="page-head"><button class="backbtn" id="libBack">‹ 媒体库</button><h1 class="page-title" id="libDName"></h1><span class="cnt num" id="libCount"></span>
+          <div class="libtools">
+            <button class="tbtn" id="libSort" aria-haspopup="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 4v16M7 20l-3-3M7 4l3 3M17 20V4M17 4l3 3M17 20l-3-3"/></svg><span id="libSortLbl">排序</span></button>
+            <button class="tbtn" id="libFilter" aria-haspopup="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5h18M6 12h12M10 19h4"/></svg><span>筛选</span><span class="fdot" id="libFcount"></span></button>
+            <button class="tbtn ico" id="libDensity" title="网格密度" aria-label="网格密度"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg></button>
+          </div></div>
         <div class="chips" id="libChips"></div>
         <div class="grid" id="libGrid"></div>
+        <div class="libmore" id="libMore"></div>
       </div>
     </div>
 
@@ -562,6 +595,8 @@
 
 <!-- right-click menu -->
 <div id="ctx"></div>
+<!-- shared popover for library sort / filter menus -->
+<div id="pop"></div>
 
 <!-- metadata / identify dialog -->
 <div id="dlg"><div class="dlgbox" id="dlgBox"></div></div>
@@ -672,28 +707,138 @@ async function renderLibraries(){
     <div class="lx"><div class="ln">${v.Name}</div><div class="lc">${collLabel[v.CollectionType]||'库'}</div></div></div>`).join('');
   $('#libCards').querySelectorAll('.libcard').forEach(el=>el.onclick=()=>openLibrary(views.find(v=>v.Id===el.dataset.lib)));
 }
-let libCtx = null;
+// Sort fields Emby exposes for movie/series libraries (music/episode-only ones
+// left out). Value = Emby SortBy, label = the button text.
+const SORTS = [['SortName','名称'],['CommunityRating','评分'],['DateCreated','最近添加'],['PremiereDate','上映日期'],['ProductionYear','年份'],['Runtime','时长'],['Random','随机']];
+const sortLabel = k => (SORTS.find(s=>s[0]===k)||SORTS[0])[1];
+// Grid density — beyond Emby, whose web client has no density control. Global.
+const DENSITY = ['compact','cozy','roomy'], DMIN = {compact:'120px',cozy:'160px',roomy:'210px'}, DNAME = {compact:'紧凑',cozy:'适中',roomy:'宽松'};
+const applyDensity = () => $('#libGrid').style.setProperty('--gmin', DMIN[store.get('libDensity','cozy')]||DMIN.cozy);
+
+const PAGE = 60;
+const libDefaults = () => ({ sortBy:'SortName', sortOrder:'Ascending', genre:'全部', filters:{ played:'', fav:false, resumable:false, hd:false, uhd:false, subs:false } });
+let libCtx = null, libState = libDefaults(), libTypes = null, libOffset = 0, libTotal = 0, libLoading = false, libDone = false;
+
 async function openLibrary(v){
   libCtx = v; crumb('媒体库', v.Name);
   $('#libLanding').style.display='none'; $('#libDetail').style.display='block'; $('#view').scrollTop=0;
   $('#libDName').innerHTML = v.Name;
-  const types = v.CollectionType==='tvshows' ? 'Series' : v.CollectionType==='movies' ? 'Movie' : null;
+  libTypes = v.CollectionType==='tvshows' ? 'Series' : v.CollectionType==='movies' ? 'Movie' : null;
+  applyDensity();
+  // Beyond Emby: restore the sort/filter/genre this library was last left in.
+  // Emby's own page forgets every choice on reload.
+  const saved = store.get('lib:'+v.Id, null);
+  libState = saved ? { ...libDefaults(), ...saved, filters:{ ...libDefaults().filters, ...(saved.filters||{}) } } : libDefaults();
   // genres for chips (best-effort)
   let genres = [];
   try { genres = (await EM._get('/Genres', { ParentId: v.Id, UserId: EM.userId })).Items?.slice(0,14).map(g=>g.Name) || []; } catch {}
-  $('#libChips').innerHTML = ['全部',...genres].map((g,i)=>`<span class="gchip ${i===0?'on':''}">${g}</span>`).join('');
-  $('#libChips').querySelectorAll('.gchip').forEach(c=>c.onclick=()=>{ $('#libChips').querySelectorAll('.gchip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); fillLibrary(v, types, c.textContent); });
-  fillLibrary(v, types, '全部');
+  if (!['全部',...genres].includes(libState.genre)) libState.genre = '全部';
+  $('#libChips').innerHTML = ['全部',...genres].map(g=>`<span class="gchip ${g===libState.genre?'on':''}">${g}</span>`).join('');
+  $('#libChips').querySelectorAll('.gchip').forEach(c=>c.onclick=()=>{ $('#libChips').querySelectorAll('.gchip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); libState.genre=c.textContent; saveLibState(); reload(); });
+  syncToolbar();
+  reload();
 }
-async function fillLibrary(v, types, genre){
+const saveLibState = () => { if (libCtx) store.set('lib:'+libCtx.Id, libState); };
+
+function libQuery(start){
+  const f = libState.filters;
+  const fl = [f.played, f.fav&&'IsFavorite', f.resumable&&'IsResumable'].filter(Boolean);
+  return { parentId: libCtx.Id, types: libTypes, recursive: !!libTypes,
+    sortBy: libState.sortBy, sortOrder: libState.sortOrder,
+    genre: libState.genre!=='全部'?libState.genre:null,
+    filters: fl.join(',')||null, ishd: f.hd||null, is4k: f.uhd||null, hasSubtitles: f.subs||null,
+    start, limit: PAGE };
+}
+
+// Full reload from offset 0 (library opened, or sort/filter/genre changed).
+async function reload(){
   const grid = $('#libGrid');
+  libOffset = 0; libTotal = 0; libDone = false; libLoading = true;
   grid.innerHTML = Array.from({length:14}).map(()=>`<div class="gcell sk"><div class="poster"></div></div>`).join('');
+  $('#libMore').innerHTML = '';
   try {
-    const items = await EM.items({ parentId: v.Id, types, recursive: !!types, sortBy: 'SortName', genre: genre!=='全部'?genre:null, limit: 120 });
-    grid.innerHTML = keepAll(items).length ? items.map(gcell).join('') : '<div class="empty">该分类下暂无内容。</div>';
+    const { items, total } = await EM.itemsPage(libQuery(0));
+    libTotal = total; libOffset = items.length;
+    grid.innerHTML = keepAll(items).length ? items.map(gcell).join('') : '<div class="empty">该筛选下暂无内容。</div>';
     bindCards(grid);
-  } catch (e) { grid.innerHTML=''; fail(e); }
+    $('#libCount').textContent = total ? `共 ${total} 部` : '';
+    // Random reshuffles every page, so paginating it yields dup/missing items —
+    // take the first batch and stop.
+    if (libState.sortBy==='Random' || libOffset>=libTotal) libDone = true;
+    updateMore();
+  } catch (e) { grid.innerHTML=''; $('#libCount').textContent=''; fail(e); }
+  finally { libLoading = false; }
 }
+async function loadMore(){
+  if (libLoading || libDone || !libCtx) return;
+  libLoading = true; $('#libMore').innerHTML = '<div class="sp"></div>';
+  try {
+    const { items } = await EM.itemsPage(libQuery(libOffset));
+    keepAll(items); libOffset += items.length;
+    $('#libGrid').insertAdjacentHTML('beforeend', items.map(gcell).join(''));
+    bindCards($('#libGrid'));
+    if (!items.length || libOffset>=libTotal) libDone = true;
+    updateMore();
+  } catch (e) { fail(e); }
+  finally { libLoading = false; }
+}
+const updateMore = () => $('#libMore').innerHTML = libDone ? (libTotal>PAGE?`<div class="end">已到底 · 共 ${libTotal} 部</div>`:'') : '<div class="sp"></div>';
+// Infinite scroll — the sentinel entering view pulls the next page.
+new IntersectionObserver(es=>{ if (es.some(e=>e.isIntersecting)) loadMore(); }, { root: $('#view'), rootMargin:'700px' }).observe($('#libMore'));
+
+// ---- sort / filter popover (same look as the right-click menu) ----
+const activeFilterCount = () => { const f=libState.filters; return (f.played?1:0)+(f.fav?1:0)+(f.resumable?1:0)+(f.hd?1:0)+(f.uhd?1:0)+(f.subs?1:0); };
+function syncToolbar(){
+  $('#libSortLbl').textContent = sortLabel(libState.sortBy) + (libState.sortOrder==='Descending'?' ↓':' ↑');
+  const n = activeFilterCount(), dot = $('#libFcount');
+  dot.textContent = n; dot.classList.toggle('on', n>0);
+  $('#libFilter').classList.toggle('act', n>0);
+}
+const POP = $('#pop');
+const closePop = () => POP.classList.remove('open');
+function openPop(anchor, rows, onPick){
+  POP.innerHTML = rows.map(r=> r.sep?'<div class="sep"></div>' : r.grp?`<div class="grp">${r.grp}</div>`
+    : `<div class="ci" data-k="${r.k}"><span class="k">${r.i||''}</span><span>${r.t}</span>${r.on?'<span class="on">●</span>':''}</div>`).join('');
+  POP.classList.add('open');
+  const b = POP.getBoundingClientRect(), a = anchor.getBoundingClientRect();
+  POP.style.left = Math.max(8, Math.min(a.right - b.width, innerWidth - b.width - 8)) + 'px';
+  POP.style.top  = Math.min(a.bottom + 6, innerHeight - b.height - 8) + 'px';
+  // stop the bubble: showFilterMenu() rebuilds this menu on pick, so by the time
+  // the document close-handler runs the clicked row is detached and would read as
+  // "outside", closing a menu meant to stay open for multi-select.
+  POP.querySelectorAll('.ci').forEach(el=>el.onclick=ev=>{ ev.stopPropagation(); onPick(el.dataset.k); });
+}
+$('#libSort').onclick = e => { e.stopPropagation();
+  const rows = [ {grp:'排序方式'}, ...SORTS.map(([k,t])=>({k:'s:'+k, t, on: libState.sortBy===k})),
+    {sep:1}, {grp:'顺序'},
+    {k:'o:Ascending', t:'升序', on: libState.sortOrder==='Ascending'},
+    {k:'o:Descending', t:'降序', on: libState.sortOrder==='Descending'} ];
+  openPop($('#libSort'), rows, k=>{ const [t,v]=k.split(':'); if(t==='s') libState.sortBy=v; else libState.sortOrder=v; saveLibState(); syncToolbar(); closePop(); reload(); });
+};
+function showFilterMenu(){ const f = libState.filters;
+  const rows = [ {grp:'状态'},
+    {k:'p:', t:'全部', on: !f.played},
+    {k:'p:IsUnplayed', t:'未播放', on: f.played==='IsUnplayed'},
+    {k:'p:IsPlayed', t:'已播放', on: f.played==='IsPlayed'},
+    {k:'t:fav', t:'收藏', i: f.fav?'✓':'', on: f.fav},
+    {k:'t:resumable', t:'可继续观看', i: f.resumable?'✓':'', on: f.resumable},
+    {sep:1}, {grp:'画质与特性'},
+    {k:'t:hd', t:'HD', i: f.hd?'✓':'', on: f.hd},
+    {k:'t:uhd', t:'4K', i: f.uhd?'✓':'', on: f.uhd},
+    {k:'t:subs', t:'有字幕', i: f.subs?'✓':'', on: f.subs},
+    ...(activeFilterCount()? [{sep:1},{k:'clear', t:'清除筛选', i:'✕'}] : []) ];
+  openPop($('#libFilter'), rows, k=>{
+    if (k==='clear') libState.filters = libDefaults().filters;
+    else { const [t,v]=k.split(':'); if(t==='p') f.played=v; else f[v]=!f[v]; }
+    saveLibState(); syncToolbar(); reload(); showFilterMenu();  // keep open for multi-select
+  });
+}
+$('#libFilter').onclick = e => { e.stopPropagation(); showFilterMenu(); };
+$('#libDensity').onclick = e => { e.stopPropagation();
+  const next = DENSITY[(DENSITY.indexOf(store.get('libDensity','cozy'))+1)%DENSITY.length];
+  store.set('libDensity', next); applyDensity(); toast(`网格密度：${DNAME[next]}`);
+};
+document.addEventListener('click', e=>{ if (POP.classList.contains('open') && !e.target.closest('#pop,#libSort,#libFilter')) closePop(); });
 $('#libBack').onclick = renderLibraries;
 
 // ---------- search ----------
@@ -1042,7 +1187,7 @@ async function refreshItem(id){
   try { keep(await EM.item(id)); } catch {}
   const pane = document.querySelector('.view-pane.on')?.id;
   if (pane === 'v-home') renderHome();
-  else if (pane === 'v-lib' && libCtx) fillLibrary(libCtx, libCtx.CollectionType==='tvshows'?'Series':libCtx.CollectionType==='movies'?'Movie':null, '全部');
+  else if (pane === 'v-lib' && libCtx && $('#libDetail').style.display!=='none') reload();
   else if (pane === 'v-search') runSearch($('#topSearch').value.trim());
 }
 
