@@ -311,11 +311,44 @@ export class EmbyClient {
   }
   item(id) { return this._get(`/Users/${this.userId}/Items/${id}`, { Fields: EmbyClient.FIELDS }); }
 
-  resume() {
-    return this._get(`/Users/${this.userId}/Items`, {
-      Filters: 'IsResumable', Recursive: true, SortBy: 'DatePlayed', SortOrder: 'Descending',
-      IncludeItemTypes: 'Movie,Episode', Fields: EmbyClient.FIELDS, Limit: 24,
+  // "继续观看". Scoped to the libraries handed in -- normally the ids from
+  // views(), i.e. exactly what this account is allowed to SEE. A ParentId-less
+  // recursive query is not the same thing: it walks every library the account
+  // can read, including the ones Emby hides from this user's home screen, and
+  // that is how a hidden library's half-watched episodes ended up on the rail
+  // while its "最近添加" row (built from views()) correctly stayed away.
+  //
+  // IsUnplayed alongside IsResumable is the other half. IsResumable only asks
+  // "is PlaybackPositionTicks > 0", so an item marked played that still carries
+  // a stale resume point matches it -- a finished show sitting in 继续观看.
+  // Filters are ANDed, so the pair means "started and not finished".
+  //
+  // One request per library rather than one for the server: Emby takes a single
+  // ParentId, and libraries are a handful, not a page.
+  async resume(parentIds, limit = 24) {
+    const ids = (parentIds || []).length ? parentIds : [null];
+    const ask = (id, filters) => this._get(`/Users/${this.userId}/Items`, {
+      ParentId: id, Filters: filters, Recursive: true,
+      SortBy: 'DatePlayed', SortOrder: 'Descending',
+      IncludeItemTypes: 'Movie,Episode', Fields: EmbyClient.FIELDS, Limit: limit,
     }).then(r => r.Items || []);
+    const pages = await Promise.all(ids.map(id =>
+      // A server that will not take the pair falls back to the filter that has
+      // always worked, rather than letting the catch turn the whole rail into
+      // nothing -- an empty 继续观看 looks like "you have watched everything",
+      // which is a worse lie than the bug this filter fixes.
+      ask(id, 'IsResumable,IsUnplayed').catch(() => ask(id, 'IsResumable')).catch(() => [])));
+    // Merged by hand: each library sorted itself, the rail wants one timeline.
+    // Date.parse('') is NaN, not 0 -- an item the server gave no LastPlayedDate
+    // has to sort last, not wherever NaN lands.
+    const played = it => Date.parse(it.UserData?.LastPlayedDate || '') || 0;
+    const seen = new Set();
+    return pages.flat()
+      // Played is re-checked here and not left to the server: it is free, and it
+      // is what makes the fallback above safe to take.
+      .filter(it => it?.Id && !it.UserData?.Played && !seen.has(it.Id) && seen.add(it.Id))
+      .sort((a, b) => played(b) - played(a))
+      .slice(0, limit);
   }
   latest(parentId, limit = 20) {
     return this._get(`/Users/${this.userId}/Items/Latest`, { ParentId: parentId, Limit: limit, Fields: EmbyClient.FIELDS });

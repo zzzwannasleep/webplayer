@@ -158,6 +158,66 @@ assert.deepEqual(serverIcons(null), [], 'no record -> nothing to try');
   globalThis.fetch = realFetch;
 }
 
+// --- resume(): the two ways 继续观看 filled up with things it shouldn't -----
+// Reported twice: finished shows on the rail, and episodes from a library that
+// is hidden from this account's home screen. Both come from the same query, so
+// both are checked here.
+{
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  const item = (Id, when) => ({ Id, UserData: { LastPlayedDate: when } });
+  globalThis.fetch = async url => {
+    const q = new URL(String(url)).searchParams;
+    calls.push(q);
+    const lib = q.get('ParentId');
+    // LIB-A and LIB-B share SHARED so the dedupe has something to do.
+    const byLib = {
+      'LIB-A': [item('OLD', '2026-01-01T00:00:00Z'), item('SHARED', '2026-07-20T00:00:00Z')],
+      'LIB-B': [item('NEW', '2026-07-25T00:00:00Z'), item('SHARED', '2026-07-20T00:00:00Z'), item('NODATE')],
+    };
+    return { ok: true, status: 200, json: async () => ({ Items: byLib[lib] ?? [item('ALL')] }) };
+  };
+  const c3 = new EmbyClient('https://e.example');
+  c3.token = 'T'; c3.userId = 'U9';
+
+  const rows = await c3.resume(['LIB-A', 'LIB-B']);
+
+  assert.equal(calls.length, 2, 'one request per visible library, not one for the whole server');
+  assert.deepEqual(calls.map(q => q.get('ParentId')), ['LIB-A', 'LIB-B'],
+    'every request is scoped to a library -- an unscoped one also returns hidden libraries');
+  for (const q of calls) {
+    const f = (q.get('Filters') || '').split(',');
+    assert.ok(f.includes('IsResumable'), 'still only half-watched items');
+    assert.ok(f.includes('IsUnplayed'),
+      'a finished item can keep a stale resume point; IsResumable alone still matches it');
+  }
+  assert.deepEqual(rows.map(r => r.Id), ['NEW', 'SHARED', 'OLD', 'NODATE'],
+    'merged newest-first across libraries, deduped, and an item with no date sorts last');
+
+  calls.length = 0;
+  assert.deepEqual((await c3.resume([])).map(r => r.Id), ['ALL'], 'no libraries -> one unscoped query');
+  assert.equal(calls[0].get('ParentId'), null, 'the fallback really is unscoped');
+
+  // A server that refuses the filter pair must still produce a rail. An empty
+  // 继续观看 reads as "you have finished everything", which is a worse lie than
+  // the stale entries this filter exists to remove.
+  calls.length = 0;
+  globalThis.fetch = async url => {
+    const q = new URL(String(url)).searchParams;
+    calls.push(q);
+    if ((q.get('Filters') || '').includes('IsUnplayed')) return { ok: false, status: 400, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ Items: [item('KEPT', '2026-07-01T00:00:00Z'),
+      { Id: 'DONE', UserData: { Played: true, LastPlayedDate: '2026-07-02T00:00:00Z' } }] }) };
+  };
+  const fallback = await c3.resume(['LIB-A']);
+  assert.deepEqual(calls.map(q => q.get('Filters')), ['IsResumable,IsUnplayed', 'IsResumable'],
+    'the pair is tried first, the lone filter only as a fallback');
+  assert.deepEqual(fallback.map(r => r.Id), ['KEPT'],
+    'and a played item is still dropped client-side, which is what makes the fallback safe');
+
+  globalThis.fetch = realFetch;
+}
+
 // --- remembered servers: the "can't switch server after logout" bug ---------
 // Needs Web Storage (npm test passes --experimental-webstorage); skipped without.
 if (typeof localStorage !== 'undefined') {
