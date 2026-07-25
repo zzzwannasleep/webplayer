@@ -1,11 +1,17 @@
-# A Windows checkout gets CRLF by default, and three of these files are read by
-# something that does not tolerate it: /bin/sh sources docker/*.envsh inside the
-# container, where a trailing \r becomes part of the command. The image would
-# build fine and fail at startup with an error naming a command nobody wrote.
+# A Windows checkout gets CRLF by default, and the files below are read by
+# something that does not tolerate it: docker/nginx.conf is copied verbatim into
+# the image and parsed by nginx, and /bin/sh runs the Dockerfile's own RUN lines.
+# The image builds fine and fails at startup, with an error that names neither
+# the file nor the line endings.
 #
 # CI is unaffected either way -- git stores LF -- so this exists entirely for
 # `docker build` run from a Windows working copy.
+#
+# Matched by PATH, not by extension. This rule used to say `*.template`, and
+# renaming docker/nginx.conf.template to docker/nginx.conf dropped the file out
+# of it without a word. Anything that ends up in the image now inherits the rule
+# from its directory instead of from what it happens to be called.
+docker/*    text eol=lf
 *.envsh     text eol=lf
-*.template  text eol=lf
 *.sh        text eol=lf
 Dockerfile  text eol=lf

@@ -36,8 +36,7 @@ npm run deploy     # 在局域网起服务,打印手机能打开的地址
 |---|---|---|
 | 局域网、`http://` | **A · Docker**(或 B · 裸 Node) | 两边都是 http、同一内网,没有混合内容墙 |
 | 公网、有域名和证书 `https://` | **C · Pages 托管** | 两边都是 https,浏览器放行 |
-| 想一劳永逸、还想免掉跨域 | **A · Docker** 开 `EMBY_UPSTREAM` | 同源,混合内容和 CORS 两道墙一起消失 |
-| 已经有 Caddy / nginx 在跑 | **D · 同源反代** | 挂进现成的站点,不多起一个容器 |
+| 已经有 Caddy / nginx 在跑、想同源免掉跨域 | **D · 同源反代** | 挂进现成的站点,不多起一个容器;混合内容和 CORS 两道墙一起消失 |
 
 ### A · Docker(推荐,一条命令)
 
@@ -62,19 +61,8 @@ docker compose up -d
 镜像是 nginx alpine-slim + 构建产物:**拉取 18.3 MB,落盘约 53 MB**;跑起来是单个
 nginx worker,**常驻内存 10 MB 上下**,镜像里没有 Node、没有 npm、没有任何运行时。
 
-**想连局域网 http 的 Emby、又懒得配 CORS**,把 Emby 交给容器反代:
-
-```yaml
-# docker-compose.yml
-environment:
-  EMBY_UPSTREAM: http://192.168.1.10:8096      # 结尾不要带 /
-```
-
-然后在 LinWeb 的服务器地址里填 `http://<这台机器的IP>:23685/emby`。此时页面和 Emby
-**同源**——混合内容和 CORS 两道墙一起消失,**Emby 那边一个字都不用改**。
-
-> 群晖 / unraid 图形界面怎么点、和 Emby 写在同一个 compose 里、装完拿什么自检、
-> 怎么更新、怎么挂到已有的 https 反代后面 —— 都在
+> 群晖 / unraid 图形界面怎么点、多个容器的组织方式、装完拿什么自检、怎么更新、
+> 怎么挂到已有的 https 反代后面 —— 都在
 > **[DEPLOY.md 的 Docker 教程](DEPLOY.md#a--docker端口-23685)**。
 
 <details>
@@ -88,16 +76,6 @@ docker build --build-arg WITH_FFMPEG=0 -t linweb .    # 落盘降到约 22 MB
 ```
 
 视频和其他音频编码都由浏览器解,不受影响;真遇到 DTS 音轨时会解码失败而已。
-
-**三个踩过的地方:**
-
-- `EMBY_UPSTREAM` **结尾不要带 `/`**。带了会拼成 `http://emby:8096//Users/…`,
-  Emby 对双斜杠回 404,而这个 404 在登录框里长得像"密码错误"。
-  (容器内有一行 `${VAR%/}` 兜着,但别指望它。)
-- 反代是**按请求解析域名**的。写死解析会让 nginx 在启动时就去查 Emby 的主机名,
-  Emby 容器晚起来一秒,这个容器就进入崩溃重启循环——报错还长得像拼写错误。
-- 不设 `EMBY_UPSTREAM` 时 `/emby` 会返回 **503 并说明原因**,不是 404;
-  看到它就知道是没配,而不是路径写错了。
 
 镜像**不带任何缓存**(`Cache-Control: no-cache`):这个构建的文件名不带哈希,
 缓存狠了等于让人一直跑上周的 JS。它仍然会存盘,只是每次回源校验,32 MB 的 wasm
@@ -133,7 +111,7 @@ Cloudflare Pages / Netlify / Vercel 则填:构建命令 `npm run build`,输出�
 
 ### D · 同源反代(已经有 Caddy / nginx 的话)
 
-和方式 A 开 `EMBY_UPSTREAM` 是同一个道理,只是挂进你现成的站点而不是多起一个容器。
+把 LinWeb 和 Emby 挂进你现成的 Caddy / nginx,同源、混合内容和 CORS 两道墙一起消失。
 
 ```bash
 npm run build      # 产物在 dist/
@@ -143,7 +121,7 @@ npm run build      # 产物在 dist/
 
 ### Emby 跨域(CORS)配置
 
-方式 A 开了 `EMBY_UPSTREAM`、或走方式 D 的,同源,**跳过这一节**。其余情况
+走方式 D(同源反代)的,同源,**跳过这一节**。其余情况
 LinWeb 和 Emby 不同源,Emby 必须返回跨域头。在 Emby 后台
 把允许来源填 `*`(或精确填 LinWeb 地址),并确认放行:
 
@@ -171,8 +149,6 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
 | `.strm` 播到一半画面冻住 | S3 预签名链接中途过期(默认 1 小时,电影更长) | 已处理:自动改由服务器接管并续播 |
 | 115 / 夸克 / 阿里云盘直链放不了 | 它们校验 `User-Agent`,而浏览器改不了([crbug 571722][ua]) | 纯前端无解,只能让 Emby 服务端代理 |
 | 在线弹幕匹配不到 | 弹弹play / B 站接口都不给 CORS 头 | 需自建兼容端点,见「弹幕」;拖本地弹幕文件始终可用 |
-| 容器里 `/emby/…` 全部 **503** | 没设 `EMBY_UPSTREAM`,反代是关着的 | 设上它,或者干脆不用反代、直接填 Emby 地址 |
-| 反代之后登录**像密码错误** | `EMBY_UPSTREAM` 结尾多了 `/`,拼出双斜杠被 Emby 判 404 | 去掉结尾斜杠 |
 | 容器起来了但**页面打不开** | 端口映射写反了 | 容器内固定 23685:`-p <外部端口>:23685` |
 
 完整教程、Caddy/nginx 示例、常驻运行(PM2 / systemd)见 **[DEPLOY.md](DEPLOY.md)**。
@@ -649,6 +625,7 @@ E-AC3 路径没丢任何东西,这片子只是按影院标准做的母带。功�
     tools/shot-page.ps1     跑一个页面并截取真实桌面合成图
     tools/test-touch.mjs    手机手势:CDP 派发合成触摸(可无头)
     tools/test-controls.mjs 画面内设置菜单:字幕 / 倍速 / 弹幕键(可无头)
+    tools/test-emby-ui.mjs  Emby 浏览页:对着假服务器跑真浏览器(可无头)
     tools/firefox-bidi.mjs  火狐驱动:WebDriver BiDi(火狐已移除 CDP,没有别的路)
     tools/probe-firefox.mjs 问真火狐它到底收哪些 codec,而不是查支持表
     tools/test-firefox.mjs  火狐端到端:容器 / 音频兜底 / 字幕 / 超分 / play.html
@@ -680,6 +657,7 @@ npm run deploy                    # 构建后,把 dist/ 在局域网上起服务
 npm test                          # 全部 Node 测试套件
 node tools/test-touch.mjs         # 手机手势:合成触摸事件打在播放器上
 node tools/test-controls.mjs      # 设置菜单:字幕选择、倍速、弹幕键的真实点击
+node tools/test-emby-ui.mjs       # Emby 浏览页:返回键 / 账户卡 / 继续观看的取数
 
 node tools/probe-firefox.mjs      # 火狐真实能力面(codec 矩阵 + API 面)
 node tools/test-firefox.mjs       # 火狐端到端播放(必须有窗口,见下)
@@ -720,7 +698,15 @@ powershell -File tools/run-page.ps1 -Page public/gaindiag.html    # 响度
 它同时也采样 `<video>` 元素本身,因为"字幕被画上了"和"影片仍然可见"是两个不同的
 论断,只断言前者曾让一个后者存疑的构建蒙混过关。
 
-`test-touch.mjs` 和 `test-controls.mjs` 是仅有的两个允许跑无头的浏览器测试:前者一帧
+`test-emby-ui.mjs` 是第三个可以无头的:它压根不碰播放,只把 `emby.html` 装在一个**假
+Emby** 上(`Page.addScriptToEvaluateOnNewDocument` 在页面脚本之前换掉 `fetch` 和
+`localStorage`),然后驱动真实交互。它盯的三件事都是单元测试结构上够不着的:①模块顶层
+的 `$('#x').onclick` 如果元素被删了会抛异常并**静默**吃掉后面每一行——页面照常渲染,
+点下去才发现;②系统返回键必须关掉最上面那层覆盖层、而**不是**离开整个应用,这个论断
+没有真实 history 栈就无从断言;③"继续观看按库分别查"是一个关于**发出了哪些 URL**的
+论断。
+
+`test-touch.mjs` 和 `test-controls.mjs` 是另外两个允许跑无头的浏览器测试:前者一帧
 都不解码,后者只喂 `samples/subs-srt.mkv`(H.264 + SRT),所以无头 Chromium 缺少 HEVC
 解码器这件事与"一次长按有没有把倍速推到 2×"、"字幕那栏里有没有那条轨"都无关。两者
 都自己拉起 serve.mjs 和无头 Edge。截图能证明控制条是 46px,只有派发出去的触摸能证明

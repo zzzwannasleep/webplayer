@@ -1,22 +1,25 @@
-// The container's nginx config is generated, not written: the entrypoint runs
-// envsubst over docker/nginx.conf.template at startup. Both halves of that have
-// failure modes that produce a config which loads cleanly and behaves wrong,
-// so neither `nginx -t` nor "it started" is evidence.
+// What this file is really guarding, in one sentence: the image must start with
+// NO environment set.
 //
-// This checks the two that actually bit, plus the invariants holding them:
+// It did not. The config carried `resolver ${NGINX_LOCAL_RESOLVERS}` for an Emby
+// reverse proxy, and nothing ever set that variable. The nginx image's entrypoint
+// substitutes only variables that actually exist in the environment, so the
+// placeholder survived verbatim into /etc/nginx/conf.d/default.conf and nginx
+// died at parse time -- `[emerg] host not found in resolver "${...}"`, exit 1.
+// `resolver` is read when the config LOADS, so this happened even to people who
+// never touched the proxy. The old test here missed it by simulating envsubst as
+// "replace every ${VAR} with env[VAR] ?? ''", which is exactly the substitution
+// the real entrypoint refuses to make for an unset variable.
 //
-//   1. envsubst cannot tell nginx's $host from a shell variable. Without
-//      NGINX_ENVSUBST_FILTER it eats them and the proxy silently misroutes.
-//   2. `proxy_pass $upstream$1` looks right until the URI is bare /emby. $1 is
-//      then empty, proxy_pass is left with no URI component, and nginx falls
-//      back to forwarding the ORIGINAL uri -- so Emby is asked for /emby and
-//      answers 404. Verified against a real nginx: it forwarded "/emby".
+// The proxy is gone (users put LinWeb behind their own), so the two checks that
+// matter now are: no placeholder survives anywhere in the config, and the config
+// does not go through envsubst at all.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const tpl = readFileSync(join(ROOT, 'docker/nginx.conf.template'), 'utf8');
+const tpl = readFileSync(join(ROOT, 'docker/nginx.conf'), 'utf8');
 const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
 const ignore = readFileSync(join(ROOT, '.dockerignore'), 'utf8');
 
@@ -26,44 +29,41 @@ const check = (name, ok, detail = '') => {
   if (!ok) bad++;
 };
 
-// The filter the Dockerfile sets, applied the way the entrypoint applies it.
-const filter = new RegExp(/NGINX_ENVSUBST_FILTER="([^"]+)"/.exec(dockerfile)?.[1] ?? '(?!)');
-const render = env => tpl.replace(/\$\{(\w+)\}/g, (m, n) => (filter.test(n) ? (env[n] ?? '') : m));
+// Directives only. The header comment names the dead variables on purpose --
+// that is the scar tissue explaining why none of this is here any more -- so
+// every check below reads the config with its comments stripped.
+const conf = tpl.replace(/^\s*#.*$/gm, '');
 
-check('Dockerfile sets NGINX_ENVSUBST_FILTER', filter.source !== '(?!)',
-  'without it envsubst substitutes nginx’s own $host/$uri/$is_args');
+// The bug this file exists for. An unset one of these is fatal at startup, and
+// nothing guarantees any given deployment sets it.
+check('the nginx config carries no ${...} placeholders',
+  !/\$\{\w+\}/.test(conf),
+  conf.match(/\$\{\w+\}/g)?.join(', '));
 
-for (const v of ['EMBY_UPSTREAM', 'NGINX_LOCAL_RESOLVERS'])
-  check(`\${${v}} passes the filter`, filter.test(v), filter.source);
+// Belt to that brace: a config under /etc/nginx/templates is fed to envsubst,
+// which cannot tell nginx's own $uri from a shell variable. Copy to conf.d and
+// the question never arises.
+check('the config is copied to conf.d, not templates/ (no envsubst in the path)',
+  /COPY\s+docker\/nginx\.conf\s+\/etc\/nginx\/conf\.d\/default\.conf/.test(dockerfile),
+  'a *.template under /etc/nginx/templates would be substituted at startup');
 
-const out = render({ EMBY_UPSTREAM: 'http://emby:8096', NGINX_LOCAL_RESOLVERS: '127.0.0.11 ' });
+// The proxy is gone; nothing may quietly reintroduce a knob that has to be set.
+for (const dead of ['EMBY_UPSTREAM', 'NGINX_LOCAL_RESOLVERS', 'NGINX_ENVSUBST_FILTER'])
+  check(`${dead} is gone from the image`,
+    !dockerfile.replace(/^\s*#.*$/gm, '').includes(dead) && !conf.includes(dead),
+    'the container must start with no environment set');
 
-check('nginx’s own variables survive rendering',
-  ['$host', '$is_args', '$args', '$http_upgrade', '$remote_addr', '$scheme'].every(v => out.includes(v)));
-check('nothing is left unrendered', !/\$\{\w+\}/.test(out), out.match(/\$\{\w+\}/g)?.join(', '));
+// A Windows checkout without a .gitattributes rule hands nginx a config whose
+// lines end in \r. Checked against the WORKING COPY on purpose -- that is the
+// byte stream `docker build` uploads, and the failure is two layers from the
+// cause. The rule used to be keyed on `*.template`; renaming the file to
+// nginx.conf took it out of scope silently, which is why this check is keyed on
+// the file rather than on the pattern that is supposed to cover it.
+check('the nginx config has unix line endings',
+  !readFileSync(join(ROOT, 'docker/nginx.conf'), 'latin1').includes('\r'),
+  'CRLF -- check .gitattributes covers docker/ on this checkout');
 
-// The bug this file exists for.
-const pass = /proxy_pass\s+(\S+);/.exec(out)?.[1] ?? '';
-check('proxy_pass keeps a URI component even when the capture is empty',
-  /^\$\w+\/.*/.test(pass),
-  `${pass} -- with an empty $1 nginx forwards the original /emby instead`);
-
-// A literal upstream would be resolved at startup: an Emby container that comes
-// up a second later turns this one into a crash loop.
-check('upstream goes through a variable, not a literal host',
-  out.includes('set $emby_upstream') && /resolver\s+\S/.test(out));
-
-// Unset must be a diagnosable 503, not a config error and not a 404.
-check('unset EMBY_UPSTREAM renders a 503 guard, not a broken proxy_pass',
-  /if\s*\(\$emby_upstream\s*=\s*""\)\s*\{\s*return 503/.test(render({ NGINX_LOCAL_RESOLVERS: '127.0.0.11 ' })));
-
-// /emby.html and /embything must not be swallowed by the proxy location.
-const loc = /location\s+~\s+(\S+)\s*\{/.exec(out)?.[1] ?? '';
-const re = new RegExp(loc);
-check('the proxy location matches /emby and /emby/... only',
-  re.test('/emby') && re.test('/emby/Users') && !re.test('/emby.html') && !re.test('/embything'), loc);
-
-check('the container listens on 23685', /listen\s+23685;/.test(out));
+check('the container listens on 23685', /listen\s+23685;/.test(conf));
 check('EXPOSE agrees with the listen directive', /EXPOSE\s+23685/.test(dockerfile));
 
 // The build context is an allowlist because the repo root holds the test
@@ -84,13 +84,6 @@ for (const src of new Set(copied))
     `add !${src.split('/')[0]} -- the build context has no ${src}`);
 for (const dropped of ['public/vendor', 'public/_*.html'])
   check(`.dockerignore withholds ${dropped}`, new RegExp(`^${dropped.replace(/[.*]/g, '\\$&')}$`, 'm').test(ignore));
-
-// A Windows checkout without .gitattributes hands /bin/sh a script whose lines
-// end in \r. The image builds, then the entrypoint dies naming a command nobody
-// wrote. Checked here because the failure is three layers away from the cause.
-check('the entrypoint script has unix line endings',
-  !readFileSync(join(ROOT, 'docker/05-emby-upstream.envsh'), 'latin1').includes('\r'),
-  'CRLF -- check .gitattributes took effect on this checkout');
 
 console.log(bad ? `\n${bad} problem(s) in the container config` : '\ncontainer config holds');
 process.exit(bad ? 1 : 0);

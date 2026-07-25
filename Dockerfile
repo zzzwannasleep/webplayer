@@ -42,23 +42,15 @@ RUN [ "$WITH_FFMPEG" = "1" ] || rm -f dist/vendor/ffmpeg*.js dist/vendor/ffmpeg-
 # never loads. ~12 MB.
 FROM nginx:1-alpine-slim
 
-# The filter is load-bearing, not tidiness: it stops envsubst from substituting
-# nginx's own $host / $uri / $is_args, which are indistinguishable from shell
-# variables to a text-substitution tool.
-ENV EMBY_UPSTREAM="" \
-    NGINX_ENVSUBST_FILTER="^(EMBY_|NGINX_)"
+# conf.d, not templates/: a file under /etc/nginx/templates goes through the
+# entrypoint's envsubst, and there is nothing here to substitute. See the header
+# of that file for the outage this avoids.
+COPY docker/nginx.conf              /etc/nginx/conf.d/default.conf
 
-COPY docker/nginx.conf.template     /etc/nginx/templates/default.conf.template
-COPY docker/05-emby-upstream.envsh  /docker-entrypoint.d/05-emby-upstream.envsh
-
-# The entrypoint skips anything in /docker-entrypoint.d without the executable
-# bit -- silently, with one line on stdout. Windows checkouts never carry it.
-#
 # worker_processes auto spawns one worker per core; on a 16-core NAS that is 16
 # processes to serve a handful of static files. One worker holds thousands of
 # idle connections and keeps the container around 10 MB resident.
-RUN chmod +x /docker-entrypoint.d/05-emby-upstream.envsh \
- && sed -i 's/^worker_processes.*/worker_processes 1;/' /etc/nginx/nginx.conf
+RUN sed -i 's/^worker_processes.*/worker_processes 1;/' /etc/nginx/nginx.conf
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
