@@ -49,6 +49,20 @@ function painted(root) {
   return n;
 }
 
+/** A cheap fingerprint of what the danmaku canvas currently shows. */
+function signature(root) {
+  const c = root.querySelector('.dmk canvas');
+  if (!c || !c.width) return 'no-canvas';
+  const s = document.createElement('canvas');
+  s.width = c.width; s.height = c.height;
+  const g = s.getContext('2d', { willReadFrequently: true });
+  g.drawImage(c, 0, 0);
+  const d = g.getImageData(0, 0, s.width, s.height).data;
+  let h = 0;
+  for (let i = 3; i < d.length; i += 401) h = (h * 31 + d[i]) | 0;   // sparse alpha sample
+  return String(h);
+}
+
 const stage = document.getElementById('stage'), video = document.getElementById('video');
 
 try {
@@ -105,7 +119,43 @@ try {
   ok('a rebuild while paused does not replay the backlog', after < 5000,
     after + ' opaque px at t=' + video.currentTime.toFixed(1) + 's (all comments end at 3s; a full replay measures ~43800)');
 
+  // ---- turning it on while PAUSED must paint ----
+  // The check above only proves the backlog does not flood in, because it
+  // presses play immediately afterwards -- the rAF loop it measures was started
+  // by the 'play' event, not by the rebuild. That left the real bug invisible:
+  // the library starts its loop only when the media is playing at the moment
+  // the renderer is constructed (api/init.js: `if (!this.media.paused)`), and
+  // apply() rebuilds on every settings change, while paused is exactly when
+  // settings get changed. Turning danmaku ON while paused therefore painted
+  // nothing at all until playback resumed -- indistinguishable, from the
+  // viewer's chair, from "the danmaku is broken".
+  //
+  // The test media is a capture stream, so it cannot be seeked; instead the
+  // comments are authored around wherever the playhead stopped.
+  video.pause();
+  await sleep(120);
+  layer.setComments([], '');
+  await sleep(80);
+  ok('canvas is blank before the paused rebuild', painted(stage) < 200, painted(stage) + ' opaque px');
+
+  const t0 = video.currentTime;
+  const near = Array.from({ length: 40 }, (_, i) => ({
+    time: t0 - 3 + i * 0.06, mode: 'rtl', color: '#00ff00', text: '暂停时也要看得见 ' + i,
+  }));
+  layer.setComments(near, 'paused.xml');       // setComments -> apply -> drawOneFrame
+  await sleep(200);                            // two rAFs plus slack
+  const pausedPx = painted(stage);
+  ok('comments appear while the video is PAUSED', pausedPx > 200,
+    pausedPx + ' opaque px, paused=' + video.paused + ' t=' + video.currentTime.toFixed(2));
+
+  // ...and the hand-driven frame must stop again, or a paused tab burns a core
+  // animating comments nobody is watching. Same pixels a beat later = frozen.
+  const sig1 = signature(stage);
+  await sleep(500);
+  ok('the paused frame is frozen, not still animating', signature(stage) === sig1, sig1 + ' -> ' + signature(stage));
+
   // ---- settings really change the layer ----
+  layer.setComments(list, 'test.xml');
   layer.apply({ ...s, opacity: 0.3, area: 0.5 });
   ok('opacity applied to the layer', layer.box.style.opacity === '0.3', layer.box.style.opacity);
   ok('display area applied', layer.box.style.height === '50%', layer.box.style.height);
@@ -122,6 +172,61 @@ try {
   // ---- blocklist ----
   layer.apply({ ...s, on: true, limit: 0, block: ['测试 1'] });
   ok('blocklist drops matching comments', layer.shown < 60, layer.shown + ' of 60 kept');
+
+  // ---- the on-page panel ----
+  // What replaced the danmaku group in the settings popover. The thing being
+  // asserted is the reason it moved: a search answers with several series of
+  // several episodes each, and the menu could only offer one <select> -- so
+  // every candidate looked alike, and when the old code got exactly one it took
+  // it silently. Grouped rows, every episode its own target, nothing implicit.
+  saveSettings({ ...DEFAULTS, api: 'https://dmk.example' });
+  const { DanmakuPanel, panelStyles } = await import('../src/danmaku/panel.js');
+  document.head.append(Object.assign(document.createElement('style'), { textContent: panelStyles() }));
+  const dmkBtn = document.createElement('button');
+  const panel = new DanmakuPanel(layer, { key: 'emby:PANEL', hint: '测试番剧', button: dmkBtn });
+  document.body.append(panel.el);
+  ok('panel prefills the search box from the item', panel.q.value === '测试番剧', panel.q.value);
+  ok('the server address is a plain field on the page', panel.api.value === 'https://dmk.example', panel.api.value);
+
+  const realFetch = window.fetch;
+  const json = o => new Response(JSON.stringify(o), { headers: { 'content-type': 'application/json' } });
+  window.fetch = async (u, ...rest) => {
+    const url = String(u);
+    if (url.includes('/search/episodes')) return json({ animes: [
+      { animeTitle: '番剧甲', typeDescription: 'TV动画', episodes: [{ episodeId: 11, episodeTitle: '第1话' }, { episodeId: 12, episodeTitle: '第2话' }] },
+      { animeTitle: '番剧乙', typeDescription: '剧场版', episodes: [{ episodeId: 21, episodeTitle: '本篇' }] },
+    ] });
+    if (url.includes('/comment/')) return json({ comments: [
+      { cid: 1, p: `${video.currentTime.toFixed(2)},1,16711680,1`, m: '来自服务端' },
+    ] });
+    return realFetch(u, ...rest);
+  };
+  try {
+    await panel.search();
+    ok('search results are grouped by series', panel.el.querySelectorAll('.dmkp-grp').length === 2,
+      panel.el.querySelectorAll('.dmkp-grp').length + ' groups');
+    const eps = panel.el.querySelectorAll('.dmkp-ep');
+    ok('every episode is its own clickable row', eps.length === 3, eps.length + ' rows');
+    ok('results are a list, not a <select>', panel.el.querySelectorAll('select').length === 0);
+
+    eps[0].click();
+    await sleep(250);
+    ok('clicking an episode loads exactly that track',
+      layer.count === 1 && panel.name === '番剧甲 · 第1话', `${layer.count} 条 / ${panel.name}`);
+    ok('loading a track turns the overlay on', panel.s.on === true && dmkBtn.classList.contains('on'));
+    ok('the loaded track is remembered for the item', (await loadTrack('emby:PANEL'))?.comments?.length === 1);
+
+    // A search that finds nothing must say so where the viewer is looking,
+    // rather than leaving the last results on screen.
+    window.fetch = async () => json({ animes: [] });
+    panel.q.value = '不存在的片子';
+    await panel.search();
+    ok('an empty search reports itself in the panel',
+      panel.el.querySelector('.dmkp-now.err') && !panel.el.querySelectorAll('.dmkp-ep').length,
+      panel.el.querySelector('.dmkp-now')?.textContent || '');
+  } finally { window.fetch = realFetch; }
+  await forgetTrack('emby:PANEL');
+  panel.el.remove();
 
   // ---- persistence ----
   saveSettings({ ...DEFAULTS, on: true, fontSize: 33, api: 'https://dmk.example' });

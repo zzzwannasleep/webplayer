@@ -190,7 +190,7 @@
           </div>
           <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
           <div class="vspacer"></div>
-          <button class="vbtn" id="dmkBtn" aria-label="弹幕" title="弹幕（字幕和倍速在设置里）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
+          <button class="vbtn" id="dmkBtn" aria-label="弹幕开关" title="弹幕开关（搜索和设置在右侧弹幕栏）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
           <div class="menu-wrap">
             <button class="vbtn" id="gearBtn" aria-label="设置：字幕 · 倍速 · 轨道" title="设置：字幕 · 倍速 · 轨道" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             <div class="menu" id="picks" role="menu" hidden></div>
@@ -226,7 +226,8 @@ import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
 import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
 import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
-import { DanmakuLayer, loadRenderer, source, parseAny, loadSettings, saveSettings, loadTrack, saveTrack, forgetTrack } from '../src/danmaku/index.js';
+import { DanmakuLayer, loadRenderer } from '../src/danmaku/index.js';
+import { DanmakuPanel, panelStyles } from '../src/danmaku/panel.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
@@ -446,7 +447,7 @@ const NATIVE_WHY = {
 // current value, each opening into its own controls. Choices live HERE, in
 // CHOICE, not in the DOM -- a control inside a closed panel does not exist.
 const menu = new SettingsMenu($('#picks'));
-document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() }));
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() + panelStyles() }));
 
 const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
 const label = (x, i) => x.label || `轨道 ${i + 1}`;
@@ -519,7 +520,6 @@ function buildGroups() {
         { type: 'note', text: '触屏长按画面可临时 2×，松手即恢复到这里选的速度。' },
       ],
     },
-    danmakuGroup(),
     info && volume.ok && extrasOk() && {
       key: 'gain', label: '响度', value: { 1: '原始', auto: '自动增益' }[CHOICE.gain] || `+${CHOICE.gain}×`,
       rows: [
@@ -561,149 +561,36 @@ const paintMenu = () => menu.set(buildGroups());
 // /api/v2/* route 403s with "Missing Authentication Headers" and no CORS
 // header at all), and dandanplay's signature needs an AppSecret, which cannot
 // live in a page anyone can View Source on. So this page talks only to a
-// dandanplay-SHAPED endpoint the viewer runs and configures here -- and works
-// with no endpoint at all from a dropped file.
-const DM = {
-  layer: null,
-  s: loadSettings(),
-  key: WANT.id ? `emby:${WANT.id}` : '',
-  name: '',            // where the loaded track came from
-  busy: '',            // in-flight status, shown in the panel
-  picks: [],           // match candidates, when there was more than one
-};
+// dandanplay-SHAPED endpoint the viewer runs and configures -- and works with
+// no endpoint at all from a dropped file.
+//
+// All of that -- the address, the search, the results, the sliders -- lives in
+// a card in the sidebar rather than in the gear popover, because typing a URL
+// and picking one episode out of several series are not things a popover over
+// the video can do. See src/danmaku/panel.js. The toolbar button is a plain
+// on/off again.
+let dmk = null;
 
-function danmakuGroup() {
-  if (!DM.layer) return null;
-  const s = DM.s;
-  const n = DM.layer.count;
-  const canMatch = !!(s.api && (WANT.series || WANT.title));
-  return {
-    key: 'dmk', label: '弹幕',
-    value: DM.busy || (n ? `${s.on ? '' : '已关闭 · '}${n} 条` : '未加载'),
-    rows: [
-      { type: 'toggle', id: 'dmkOn', label: '显示弹幕', value: s.on, onChange: v => { setDanmaku({ on: v }); } },
-      { type: 'note', text: DM.busy || (n ? `${DM.name}｜${n} 条` : '还没有弹幕：自动匹配，或载入本地 .xml / .json 文件（也可直接拖进画面）') },
-      { type: 'button', id: 'dmkMatch', label: '自动匹配弹幕', disabled: !canMatch || !!DM.busy,
-        value: s.api ? '' : '需先填服务地址', onClick: autoMatch },
-      DM.picks.length > 1 && { type: 'select', id: 'dmkPick', label: '匹配结果', value: '',
-        options: [{ value: '', label: `${DM.picks.length} 个候选，选一个` }, ...DM.picks.map(p => ({ value: p.id, label: p.label }))],
-        onChange: v => v && fetchEpisode(v) },
-      { type: 'button', id: 'dmkFile', label: '载入本地弹幕文件', onClick: () => fileInput.click() },
-      n && { type: 'button', id: 'dmkClear', label: '清除本片弹幕', onClick: clearDanmaku },
-      { type: 'range', id: 'dmkOpacity', label: '不透明度', hint: `${Math.round(s.opacity * 100)}%`,
-        min: 0.1, max: 1, step: 0.05, value: s.opacity, onInput: v => setDanmaku({ opacity: Number(v) }) },
-      { type: 'range', id: 'dmkSize', label: '字号', hint: `${s.fontSize}`, min: 12, max: 48, step: 1, value: s.fontSize,
-        onInput: v => setDanmaku({ fontSize: Number(v) }) },
-      { type: 'range', id: 'dmkSpeed', label: '速度', hint: `${s.speed}`, min: 60, max: 320, step: 10, value: s.speed,
-        onInput: v => setDanmaku({ speed: Number(v) }) },
-      { type: 'range', id: 'dmkArea', label: '显示区域', hint: `画面上 ${Math.round(s.area * 100)}%`,
-        min: 0.2, max: 1, step: 0.1, value: s.area, onInput: v => setDanmaku({ area: Number(v) }) },
-      { type: 'range', id: 'dmkLimit', label: '每秒上限', hint: s.limit ? `${s.limit} 条` : '不限',
-        min: 0, max: 40, step: 1, value: s.limit, onInput: v => setDanmaku({ limit: Number(v) }) },
-      { type: 'text', id: 'dmkBlock', label: '屏蔽词（逗号分隔，/regex/ 亦可）', value: (s.block || []).join(','),
-        placeholder: '前方高能,/^\\d+$/', onChange: v => setDanmaku({ block: v.split(',').map(x => x.trim()).filter(Boolean) }) },
-      { type: 'text', id: 'dmkApi', label: '弹幕服务地址', value: s.api, placeholder: 'https://…（弹弹play 接口格式）',
-        onChange: v => setDanmaku({ api: v.trim() }) },
-      { type: 'note', text: '第三方弹幕站不放行浏览器跨域，且需要密钥——网页无法直连。填一个你自己部署的、兼容弹弹play接口的地址即可；留空则只用本地文件。' },
-    ].filter(Boolean),
-  };
-}
+(async () => {
+  try { await loadRenderer(); } catch (e) { return player.log(`弹幕渲染器加载失败: ${e.message}`, 'warn'); }
+  const layer = new DanmakuLayer(video, stage, { log: player.log });
+  dmk = new DanmakuPanel(layer, {
+    key: WANT.id ? `emby:${WANT.id}` : '',
+    hint: WANT.series || WANT.title,
+    log: player.log,
+    button: $('#dmkBtn'),
+  });
+  $('#logCard').before(dmk.el);      // above the log, below 来源
+  $('#dmkBtn').hidden = false;
+  await dmk.restore();
+})();
 
-/** The single write path for danmaku settings: persist, re-render, repaint. */
-function setDanmaku(patch) {
-  DM.s = { ...DM.s, ...patch };
-  saveSettings(DM.s);
-  DM.layer?.apply(DM.s);
-  $('#dmkBtn').classList.toggle('on', DM.s.on);
-  $('#dmkBtn').setAttribute('aria-pressed', String(DM.s.on));
-  paintMenu();
-}
-
-function setTrack(list, name, persist = true) {
-  DM.name = name;
-  DM.busy = '';
-  DM.layer.setComments(list, name);
-  if (persist && DM.key) saveTrack(DM.key, name, list);
-  player.log(`弹幕已载入: ${name}（${list.length} 条）`);
-  setDanmaku(list.length ? { on: true } : {});
-}
-
-async function clearDanmaku() {
-  DM.picks = [];
-  DM.name = '';
-  DM.layer.setComments([], '');
-  await forgetTrack(DM.key);
-  paintMenu();
-}
-
-/** Series name + episode number -> a comment track, via the configured server. */
-async function autoMatch() {
-  DM.picks = [];
-  DM.busy = '匹配中…';
-  paintMenu();
-  try {
-    const found = await source.episodes(DM.s.api, WANT.series || WANT.title, WANT.ep);
-    if (!found.length) throw new Error('没有匹配到剧集');
-    DM.picks = found;
-    await fetchEpisode(found[0].id);
-  } catch (e) {
-    DM.busy = '';
-    player.log(`弹幕匹配失败: ${e.message}`, 'warn');
-    DM.busy = e.message;
-    paintMenu();
-  }
-}
-
-async function fetchEpisode(id) {
-  const name = DM.picks.find(p => String(p.id) === String(id))?.label || `弹幕 ${id}`;
-  DM.busy = '下载弹幕…';
-  paintMenu();
-  try {
-    setTrack(await source.comments(DM.s.api, id), name);
-  } catch (e) {
-    DM.busy = e.message;
-    player.log(`弹幕下载失败: ${e.message}`, 'warn');
-    paintMenu();
-  }
-}
-
-async function importFile(file) {
-  if (!file) return;
-  try {
-    const list = parseAny(await file.text());
-    if (!list.length) throw new Error('文件里没有可识别的弹幕');
-    DM.picks = [];
-    setTrack(list, file.name);
-  } catch (e) { player.log(`弹幕文件读取失败: ${e.message}`, 'warn'); DM.busy = e.message; paintMenu(); }
-}
-
-const fileInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.xml,.json,text/xml,application/json', hidden: true });
-fileInput.addEventListener('change', () => { importFile(fileInput.files[0]); fileInput.value = ''; });
-document.body.append(fileInput);
+$('#dmkBtn').addEventListener('click', () => dmk?.toggle());
 
 // Dropping a file on the picture is the shortest path, so it is also wired.
 for (const ev of ['dragenter', 'dragover']) stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('dragging'); });
 for (const ev of ['dragleave', 'drop']) stage.addEventListener(ev, e => { if (ev === 'drop') e.preventDefault(); stage.classList.remove('dragging'); });
-stage.addEventListener('drop', e => importFile(e.dataTransfer?.files?.[0]));
-
-// With no track loaded there is nothing to toggle, so this pressed as a dead
-// button -- and it is a box with lines of text in it, sitting next to the gear,
-// so a dead press reads as a broken subtitle button. Send that press to the
-// panel that can actually load a track.
-$('#dmkBtn').addEventListener('click', e => {
-  if (DM.layer?.count) return setDanmaku({ on: !DM.s.on });
-  e.stopPropagation();     // else the outside-click handler shuts what we just opened
-  openMenu('dmk');
-});
-
-(async () => {
-  try { await loadRenderer(); } catch (e) { return player.log(`弹幕渲染器加载失败: ${e.message}`, 'warn'); }
-  DM.layer = new DanmakuLayer(video, stage, { log: player.log });
-  $('#dmkBtn').hidden = false;
-  const saved = await loadTrack(DM.key);
-  if (saved?.comments?.length) { DM.name = saved.name; DM.layer.setComments(saved.comments, saved.name); }
-  setDanmaku({});     // applies the stored settings and repaints the button
-})();
+stage.addEventListener('drop', e => dmk?.importFile(e.dataTransfer?.files?.[0]));
 
 // Positional first (the Emby stream list and the demuxed track list are both the
 // container's tracks in order, so index N maps to index N); language only
@@ -990,14 +877,6 @@ gear.addEventListener('click', e => {
   // Always reopen on the root list, never on whichever panel was last seen.
   if (open) { menu.open = null; paintMenu(); wake(); }
 });
-/** Open the popover straight onto one panel -- used by the danmaku button. */
-function openMenu(key) {
-  picks.hidden = false;
-  gear.setAttribute('aria-expanded', 'true');
-  menu.open = key;
-  paintMenu();
-  wake();
-}
 document.addEventListener('click', e => {
   if (!picks.hidden && !picks.contains(e.target) && e.target !== gear) closeMenu();
 });

@@ -67,16 +67,21 @@ export class DanmakuLayer {
 
     // The renderer is handed this instead of the <video>. It reads the same
     // three properties and binds the same events, but going through here keeps
-    // a reference to its own `seeking` handler -- see apply(), which has to
-    // call it. Registering on the real element as well means playback, pausing
-    // and real seeks reach the renderer exactly as before.
-    this._seekers = [];
+    // references to its own seeking/play/pause handlers -- see apply(), which
+    // has to call all three by hand. Registering on the real element as well
+    // means playback, pausing and real seeks reach the renderer exactly as
+    // before. ('playing'/'waiting' are aliases the library also binds; one
+    // handle on each of play and pause is all we need, so they are not kept.)
+    this._ev = { seeking: [], play: [], pause: [] };
     this.media = {
       get currentTime() { return video.currentTime; },
       get paused() { return video.paused; },
       get playbackRate() { return video.playbackRate; },
-      addEventListener: (t, f) => { if (t === 'seeking') this._seekers.push(f); video.addEventListener(t, f); },
-      removeEventListener: (t, f) => { this._seekers = this._seekers.filter(x => x !== f); video.removeEventListener(t, f); },
+      addEventListener: (t, f) => { this._ev[t]?.push(f); video.addEventListener(t, f); },
+      removeEventListener: (t, f) => {
+        for (const k of Object.keys(this._ev)) this._ev[k] = this._ev[k].filter(x => x !== f);
+        video.removeEventListener(t, f);
+      },
     };
     this._onResize = () => this.dm?.resize();
     addEventListener('resize', this._onResize);
@@ -114,13 +119,39 @@ export class DanmakuLayer {
       comments: styled(list, s, this.box.clientHeight || this.stage.clientHeight),
     });
     this.shown = list.length;
+    if (this.video.paused) this.drawOneFrame();
+  }
 
-    // A renderer built while the media is PAUSED starts at comment 0: the
-    // library only seeks to the playhead when it is constructed on a playing
-    // element. Every settings change rebuilds, and settings are exactly what
-    // you fiddle with while paused, so without this the whole episode's
-    // backlog floods the screen the moment playback resumes.
-    if (this.video.paused && this.video.currentTime > 0) for (const f of this._seekers) f();
+  /**
+   * Paint the current playhead while the media is PAUSED.
+   *
+   * The library starts its rAF loop only when the media is playing at the
+   * moment the renderer is constructed (api/init.js: `if (!this.media.paused)
+   * { seek(); play(); }`) -- and apply() rebuilds on every settings change,
+   * while paused is exactly when a viewer fiddles with settings. So turning
+   * danmaku ON while paused used to leave the screen blank until playback
+   * resumed, which reads as "the danmaku is broken". Measured, not assumed:
+   * `_.paused` starts true and `_.visible` starts true, so the library's own
+   * play handler will run the loop when called by hand.
+   *
+   * Three handlers, in order: seek moves the comment pointer to the playhead
+   * (without it the whole episode's backlog floods in at once, and it also
+   * clear()s, which is the other half of why the screen went black), play
+   * starts the loop, pause freezes it again once a frame has been drawn. Two
+   * rAFs deep because the library queues its own frame callback, which may sit
+   * behind ours.
+   */
+  drawOneFrame() {
+    const dm = this.dm;
+    if (!dm) return;
+    if (this.video.currentTime > 0) for (const f of this._ev.seeking) f();
+    for (const f of this._ev.play) f();
+    const freeze = () => {
+      // Guarded on identity: a settings change during these two frames swaps in
+      // a new renderer, and pausing that one would freeze a loop it still needs.
+      if (this.dm === dm && this.video.paused) for (const f of this._ev.pause) f();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(freeze));
   }
 
   destroyRenderer() {
@@ -165,18 +196,33 @@ async function get(url) {
 }
 
 export const source = {
-  /** Series name + episode number -> candidate episodes. */
-  async episodes(api, anime, episode) {
+  /**
+   * A keyword -> the series that match it, each with its episode list.
+   *
+   * Kept as a tree rather than flattened to "Series · Episode" strings because
+   * a flat list is what forced the old UI into a single <select>: a search for
+   * a common word answers with several series of a dozen episodes each, and
+   * picking out of 60 identically-shaped lines is guesswork. Grouped, you
+   * recognise the series first and the episode second.
+   *
+   * No `episode=` filter is sent. The server would then answer with the one
+   * episode it thinks you meant, and being silently handed the wrong episode --
+   * comments that drift or never line up -- is indistinguishable from broken.
+   * ponytail: one search/episodes call returns the whole tree; search/anime
+   * plus bangumi/{id} would be two round-trips for the same data. Revisit if a
+   * server is found that truncates the episode list.
+   */
+  async search(api, keyword) {
     const base = trim(api);
     if (!base) throw new Error('未配置弹幕服务地址');
-    const q = new URLSearchParams({ anime });
-    if (episode) q.set('episode', String(episode));
-    const j = await get(`${base}/api/v2/search/episodes?${q}`);
-    const out = [];
-    for (const a of j?.animes || [])
-      for (const e of a.episodes || [])
-        out.push({ id: e.episodeId, label: `${a.animeTitle} · ${e.episodeTitle}` });
-    return out;
+    if (!String(keyword || '').trim()) throw new Error('请输入搜索关键词');
+    const j = await get(`${base}/api/v2/search/episodes?${new URLSearchParams({ anime: String(keyword).trim() })}`);
+    return (j?.animes || []).map(a => ({
+      title: a.animeTitle || '未命名',
+      // Servers disagree on which of these they send; any is better than none.
+      kind: a.typeDescription || a.type || '',
+      episodes: (a.episodes || []).map(e => ({ id: e.episodeId, title: e.episodeTitle || String(e.episodeId) })),
+    })).filter(a => a.episodes.length);
   },
 
   /** Comments for one episode id, already parsed into the neutral shape. */
@@ -187,11 +233,3 @@ export const source = {
     return parseAny(JSON.stringify(j));
   },
 };
-
-/**
- * "S01E05" style hints out of what Emby told us, so the search box starts with
- * something usable instead of the raw display title.
- */
-export function matchHint({ series, name, season, episode }) {
-  return { anime: (series || name || '').trim(), episode: episode || 0, season: season || 0 };
-}

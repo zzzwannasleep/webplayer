@@ -281,7 +281,7 @@
           </div>
           <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
           <div class="vspacer"></div>
-          <button class="vbtn" id="dmkBtn" aria-label="弹幕" title="弹幕（字幕和倍速在设置里）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
+          <button class="vbtn" id="dmkBtn" aria-label="弹幕开关" title="弹幕开关（搜索和设置在右侧弹幕栏）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
           <div class="menu-wrap">
             <button class="vbtn" id="gearBtn" aria-label="设置：字幕 · 倍速 · 轨道" title="设置：字幕 · 倍速 · 轨道" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             <div class="menu" id="picks" role="menu" hidden></div>
@@ -322,7 +322,8 @@ import { VolumeStage } from '../src/audio/gain.js';
 import { Anime4K } from '../src/video/anime4k.js';
 import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
 import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
-import { DanmakuLayer, loadRenderer, parseAny, loadSettings, saveSettings, loadTrack, saveTrack, forgetTrack } from '../src/danmaku/index.js';
+import { DanmakuLayer, loadRenderer } from '../src/danmaku/index.js';
+import { DanmakuPanel, panelStyles } from '../src/danmaku/panel.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
@@ -458,8 +459,10 @@ function render() {
     ${info.dolbyVision ? `<div class="note">${info.dolbyVision.note}</div>` : ''}`;
 
   CHOICE.video = 0; CHOICE.audio = 0; CHOICE.sub = -1;
-  DM.key = `file:${info.name}:${info.size}`;
-  restoreTrack();
+  // A local file has no id, so name + size is the key. Also seeds the search
+  // box with the file name, which is the only hint this player has.
+  const item = { key: `file:${info.name}:${info.size}`, hint: info.name.replace(/\.[^.]+$/, '') };
+  if (dmk) dmk.setItem(item); else pendingItem = item;
   paintMenu();
 
   for (const a of info.audio) {
@@ -481,7 +484,7 @@ function render() {
 // exist. Every track type still appears even with only one option: which audio
 // track is playing is information, not just a control.
 const menu = new SettingsMenu($('#picks'));
-document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() }));
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() + panelStyles() }));
 
 const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
 const trackName = (x, i) => x.label || `轨道 ${i + 1}`;
@@ -533,7 +536,6 @@ function buildGroups() {
         { type: 'note', text: '触屏长按画面可临时 2×，松手即恢复到这里选的速度。' },
       ],
     },
-    danmakuGroup(),
     // Cinema mixes sit ~10 dB below what a web page normally sounds like, and
     // video.volume stops at 1.0. This is where that gets made up -- but only on
     // request: routing through WebAudio drifts the audio clock, so the default
@@ -682,93 +684,25 @@ async function start() {
 // ---- danmaku -------------------------------------------------------------
 // Comments over the picture, remembered per file (name + size, since a local
 // file has no id): settings in localStorage, the track itself in IndexedDB.
-// There is no lookup here -- this player opens files off a disk, so the track
-// arrives the same way the file did, by being dropped on the window.
-const DM = { layer: null, s: loadSettings(), key: '', name: '' };
-
-function danmakuGroup() {
-  if (!DM.layer) return null;
-  const s = DM.s, n = DM.layer.count;
-  return {
-    key: 'dmk', label: '弹幕', value: n ? `${s.on ? '' : '已关闭 · '}${n} 条` : '未加载',
-    rows: [
-      { type: 'toggle', id: 'dmkOn', label: '显示弹幕', value: s.on, onChange: v => setDanmaku({ on: v }) },
-      { type: 'note', text: n ? `${DM.name}｜${n} 条` : '把弹幕文件（.xml / .json）拖进窗口，或从下面载入' },
-      { type: 'button', id: 'dmkFile', label: '载入弹幕文件', onClick: () => dmkInput.click() },
-      n && { type: 'button', id: 'dmkClear', label: '清除本片弹幕', onClick: clearDanmaku },
-      { type: 'range', id: 'dmkOpacity', label: '不透明度', hint: `${Math.round(s.opacity * 100)}%`,
-        min: 0.1, max: 1, step: 0.05, value: s.opacity, onInput: v => setDanmaku({ opacity: Number(v) }) },
-      { type: 'range', id: 'dmkSize', label: '字号', hint: `${s.fontSize}`, min: 12, max: 48, step: 1, value: s.fontSize,
-        onInput: v => setDanmaku({ fontSize: Number(v) }) },
-      { type: 'range', id: 'dmkSpeed', label: '速度', hint: `${s.speed}`, min: 60, max: 320, step: 10, value: s.speed,
-        onInput: v => setDanmaku({ speed: Number(v) }) },
-      { type: 'range', id: 'dmkArea', label: '显示区域', hint: `画面上 ${Math.round(s.area * 100)}%`,
-        min: 0.2, max: 1, step: 0.1, value: s.area, onInput: v => setDanmaku({ area: Number(v) }) },
-      { type: 'range', id: 'dmkLimit', label: '每秒上限', hint: s.limit ? `${s.limit} 条` : '不限',
-        min: 0, max: 40, step: 1, value: s.limit, onInput: v => setDanmaku({ limit: Number(v) }) },
-      { type: 'text', id: 'dmkBlock', label: '屏蔽词（逗号分隔，/regex/ 亦可）', value: (s.block || []).join(','),
-        placeholder: '前方高能,/^\\d+$/', onChange: v => setDanmaku({ block: v.split(',').map(x => x.trim()).filter(Boolean) }) },
-    ].filter(Boolean),
-  };
-}
-
-/** The single write path for danmaku settings: persist, re-render, repaint. */
-function setDanmaku(patch) {
-  DM.s = { ...DM.s, ...patch };
-  saveSettings(DM.s);
-  DM.layer?.apply(DM.s);
-  $('#dmkBtn').classList.toggle('on', DM.s.on);
-  $('#dmkBtn').setAttribute('aria-pressed', String(DM.s.on));
-  paintMenu();
-}
-
-async function restoreTrack() {
-  if (!DM.layer) return;
-  const saved = await loadTrack(DM.key);
-  DM.name = saved?.name || '';
-  DM.layer.setComments(saved?.comments || [], DM.name);
-  setDanmaku({});
-}
-
-async function clearDanmaku() {
-  DM.name = '';
-  DM.layer.setComments([], '');
-  await forgetTrack(DM.key);
-  paintMenu();
-}
-
-async function loadDanmakuFile(file) {
-  if (!DM.layer) return player.log('弹幕渲染器未就绪', 'warn');
-  try {
-    const list = parseAny(await file.text());
-    if (!list.length) throw new Error('文件里没有可识别的弹幕');
-    DM.name = file.name;
-    DM.layer.setComments(list, file.name);
-    if (DM.key) saveTrack(DM.key, file.name, list);
-    player.log(`弹幕已载入: ${file.name}（${list.length} 条）`);
-    setDanmaku({ on: true });
-  } catch (e) { player.log(`弹幕文件读取失败: ${e.message}`, 'warn'); }
-}
-
-const dmkInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.xml,.json', hidden: true });
-dmkInput.addEventListener('change', () => { if (dmkInput.files[0]) loadDanmakuFile(dmkInput.files[0]); dmkInput.value = ''; });
-document.body.append(dmkInput);
-// With no track loaded there is nothing to toggle, so this pressed as a dead
-// button -- and it is a box with lines of text in it, sitting next to the gear,
-// so a dead press reads as a broken subtitle button. Send that press to the
-// panel that can actually load a track.
-$('#dmkBtn').addEventListener('click', e => {
-  if (DM.layer?.count) return setDanmaku({ on: !DM.s.on });
-  e.stopPropagation();     // else the outside-click handler shuts what we just opened
-  openMenu('dmk');
-});
+//
+// The panel is the same card play.html mounts (src/danmaku/panel.js), so a
+// local file gets the search box too -- there is no series name to guess from
+// here, but the viewer knows what they opened and can type it. Dropping an
+// .xml / .json on the window still works and is still the shortest path.
+let dmk = null, pendingItem = null;
 
 (async () => {
   try { await loadRenderer(); } catch (e) { return player.log(`弹幕渲染器加载失败: ${e.message}`, 'warn'); }
-  DM.layer = new DanmakuLayer(video, stage, { log: player.log });
+  const layer = new DanmakuLayer(video, stage, { log: player.log });
+  dmk = new DanmakuPanel(layer, { log: player.log, button: $('#dmkBtn') });
+  $('#logCard').before(dmk.el);      // above the log, below 来源
   $('#dmkBtn').hidden = false;
-  setDanmaku({});
+  // A file opened while the renderer was still being fetched has to be handed
+  // over now; dropping it would silently lose that file's remembered track.
+  await (pendingItem ? dmk.setItem(pendingItem) : dmk.restore());
 })();
+
+$('#dmkBtn').addEventListener('click', () => dmk?.toggle());
 
 // ---- opening things ------------------------------------------------------
 $('#pickFile').addEventListener('click', () => $('#file').click());
@@ -816,7 +750,7 @@ addEventListener('drop', e => {
   // Subtitles, danmaku and video all arrive the same way; tell them apart by
   // extension rather than making the user aim at the right drop target.
   if (/\.(srt|vtt|ass|ssa)$/i.test(f.name)) loadSubtitleFile(f);
-  else if (/\.(xml|json)$/i.test(f.name)) loadDanmakuFile(f);
+  else if (/\.(xml|json)$/i.test(f.name)) dmk?.importFile(f);
   else load(f);
 });
 
@@ -920,14 +854,6 @@ gear.addEventListener('click', e => {
   // Always reopen on the root list, never on whichever panel was last seen.
   if (open) { menu.open = null; paintMenu(); wake(); }
 });
-/** Open the popover straight onto one panel -- used by the danmaku button. */
-function openMenu(key) {
-  picks.hidden = false;
-  gear.setAttribute('aria-expanded', 'true');
-  menu.open = key;
-  paintMenu();
-  wake();
-}
 // Any click elsewhere, or Escape, closes it -- a panel that only closes by
 // hitting the same button again is the kind of thing people report as stuck.
 document.addEventListener('click', e => {

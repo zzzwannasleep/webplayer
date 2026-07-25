@@ -146,21 +146,37 @@ check('the subtitle picker offers the demuxed track', !sub.err && sub.options.le
 check('关闭 is the first option', sub.off === '-1', `first value = ${sub.off}`);
 
 // ---- the button that looked broken --------------------------------------
-// Zero comments loaded: the old handler toggled a setting nothing was drawing,
-// so the press did nothing at all and read as a dead subtitle button.
+// Zero comments loaded: the first version toggled a setting nothing was
+// drawing, so the press did nothing at all and read as a dead subtitle button.
+// It was then wired to open the danmaku group inside the settings popover --
+// which is where the whole feature used to live, and where a URL field and a
+// list of search candidates were both unusable. The feature is now a card in
+// the sidebar (src/danmaku/panel.js), so the press must land THERE: the search
+// box takes focus, and the popover is not involved at all.
 const dmk = await evalJS(`(async()=>{
   const p=document.querySelector('#picks');
   if(!p.hidden) document.querySelector('#gearBtn').click();
   const b=document.querySelector('#dmkBtn');
   if(b.hidden) return {err:'danmaku button never un-hidden'};
+  const card=document.querySelector('.dmkp');
+  if(!card) return {err:'no danmaku card in the sidebar'};
   b.click();
   await new Promise(r=>setTimeout(r,60));
-  return {open:!p.hidden, head:p.querySelector('.mhead .mrow-l')?.textContent};})()`);
-check('pressing 弹幕 with no track opens the 弹幕 panel', dmk.open === true, JSON.stringify(dmk));
-check('and the panel it opens is the danmaku one', dmk.head === '弹幕', `panel = ${dmk.head}`);
-// It opened via a click that bubbles to the same document handler that closes
-// the menu on an outside click; without stopPropagation it shut immediately.
-check('the menu stays open after that press', dmk.open === true, 'not closed by the outside-click handler');
+  const api=card.querySelector('input[placeholder*="https"]');
+  const q=card.querySelector('input[placeholder*="搜索"]');
+  return {
+    open:!p.hidden,
+    focused:document.activeElement===api?'api':document.activeElement===q?'search':'other',
+    inMenu:!!p.querySelector('[data-group="dmk"]'),
+    hasApi:!!api, hasSearch:!!q,
+  };})()`);
+check('the danmaku card is on the page, not in the popover', !dmk.err && dmk.hasApi && dmk.hasSearch, JSON.stringify(dmk));
+check('弹幕 is gone from the settings menu', dmk.inMenu === false, 'still a group in the popover');
+// No server configured in a throwaway profile, so the address is what is in the
+// way -- that is the field the press must land in, not the search box it would
+// only ever produce an error from.
+check('pressing 弹幕 with no track lands in the card', dmk.focused === 'api', `focus = ${dmk.focused}`);
+check('and it no longer opens the popover over the picture', dmk.open === false, JSON.stringify(dmk));
 
 check('index.html threw nothing', errors.length === 0, errors.join(' | '));
 
