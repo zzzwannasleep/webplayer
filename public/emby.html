@@ -57,14 +57,18 @@
   .navbtn.on{color:var(--accent)}
   .navbtn.on::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:3px;background:var(--accent)}
   .rail-sp{flex:1}
-  /* The server's own icon and nothing else. Until one loads it is a plain flat
-     target so the logout button is still findable; once it does, the chrome
-     gets out of the way (.has-icon). */
-  .avatar{position:relative;overflow:hidden;width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--line-2);margin-top:6px;cursor:pointer}
-  .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
-  .avatar.has-icon{background:none;border-color:transparent}
+  /* The server button wears the server's own branding once one loads. Until then
+     it is the generic rack glyph, so the target is never invisible; tryIcons()
+     puts .has-icon on the element holding the <img> and the glyph steps aside.
+     Answering "which server am I on" with a picture is the whole point. */
+  .navbtn img{width:22px;height:22px;border-radius:50%;object-fit:cover}
+  .navbtn.has-icon svg{display:none}
 
-  #view{position:relative;overflow-y:auto;overflow-x:hidden}
+  /* `contain` and not `none`: the page still scrolls, it just stops handing the
+     leftover fling to the browser -- which on a phone is pull-to-refresh, and on
+     a bottom sheet is the page behind it moving while your finger is on the
+     sheet. */
+  #view{position:relative;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
   #topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:14px;padding:14px 32px;backdrop-filter:blur(14px);background:linear-gradient(180deg,rgba(var(--bg-rgb),.86),rgba(var(--bg-rgb),.3) 70%,transparent);transition:background .3s}
   #view.scrolled #topbar{background:rgba(var(--bg-rgb),.92);border-bottom:1px solid var(--line)}
   .crumbs{font-size:14px;color:var(--fg-dim);display:flex;align-items:center;gap:8px}
@@ -76,6 +80,11 @@
   .search input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--fg);font-size:14px}
   .search input::placeholder{color:var(--fg-dim)}
   .pill{font-size:12px;color:var(--fg-dim);border:1px solid var(--line);border-radius:999px;padding:5px 12px;white-space:nowrap}
+  /* Top-right corner. The theme switch used to sit in the left rail among the
+     navigation, where it read as a fourth destination rather than a setting. */
+  .topicon{width:38px;height:38px;flex:0 0 auto;border-radius:11px;display:grid;place-items:center;color:var(--fg-dim);transition:.2s var(--ease-out)}
+  .topicon svg{width:19px;height:19px}
+  .topicon:hover{color:var(--fg);background:var(--hover)}
 
   .view-pane{display:none}.view-pane.on{display:block;animation:fadeUp .4s var(--ease-out)}
   @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -181,11 +190,16 @@
   .empty{padding:60px var(--pad);color:var(--fg-mute);text-align:center}
 
   /* detail */
-  #detail{position:fixed;inset:0;z-index:60;background:var(--ink);opacity:0;pointer-events:none;transition:opacity .4s var(--ease-out)}
+  #detail{position:fixed;inset:0;z-index:60;background:var(--ink);opacity:0;pointer-events:none;transition:opacity .4s var(--ease-out),transform .3s var(--ease-out)}
   #detail.open{opacity:1;pointer-events:auto}
+  /* while a finger is on it the sheet tracks the finger, so no easing */
+  #detail.dragging{transition:none}
   #detail.open .dhead{animation:fadeUp .6s var(--ease-out) both}#detail.open .dbody{animation:fadeUp .6s var(--ease-out) .1s both}
-  .dscroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden}
-  .dclose{position:fixed;top:20px;right:24px;z-index:8;width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.2);color:#fff;display:grid;place-items:center;backdrop-filter:blur(10px);transition:.3s}
+  .dscroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+  /* The safe-area insets are here and not only in the phone block on purpose: a
+     phone held sideways is usually WIDER than the 760px breakpoint, so it gets
+     this rule -- with the notch now on the left or right edge. */
+  .dclose{position:fixed;top:calc(20px + env(safe-area-inset-top));right:calc(24px + env(safe-area-inset-right));z-index:8;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.2);color:#fff;display:grid;place-items:center;backdrop-filter:blur(10px);transition:.3s}
   .dclose:hover{background:rgba(0,0,0,.75);transform:rotate(90deg)}.dclose svg{width:18px;height:18px}
   .dhero{position:relative;min-height:70vh;display:flex;align-items:flex-end;overflow:hidden}
   .dhero .bg{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center}
@@ -320,6 +334,19 @@
   .ablocked{font-size:12.5px;color:var(--fg-mute);line-height:1.6}
   .ablocked b{color:var(--hot);font-weight:600}
   .alog{max-height:260px;overflow:auto}
+  /* account card — the identity half of this page. Local data only, so it is the
+     one card here that can never come back "unavailable". */
+  .acc{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+  .acc .grow{min-width:0;flex:1}
+  .acc .ai{position:relative;width:44px;height:44px;border-radius:13px;flex:0 0 auto;overflow:hidden;
+           display:grid;place-items:center;background:var(--surface);border:1px solid var(--line-2);font-weight:800;font-size:18px}
+  .acc .ai img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .acc .ai.has-icon{background:none;border-color:transparent;color:transparent}
+  .acc .an{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .acc .as{font-size:12px;color:var(--fg-mute);margin-top:3px;overflow-wrap:anywhere}
+  .asub{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700;margin:16px 0 8px}
+  .alines{display:flex;gap:8px;flex-wrap:wrap}
+  .abtn.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 
   /* ---- metadata / identify dialog ---- */
   #dlg{position:fixed;inset:0;z-index:180;display:none;place-items:center;background:rgba(6,8,12,.66);backdrop-filter:blur(6px);padding:24px}
@@ -376,25 +403,17 @@
       background:rgba(var(--bg-rgb),.93);backdrop-filter:blur(18px);
     }
     .brand,.rail-sp{display:none}
-    .navbtn,.avatar{
-      width:auto;flex:1;min-width:0;height:auto;min-height:48px;border-radius:12px;
+    .navbtn{
+      width:auto;flex:1;min-width:0;height:auto;min-height:52px;border-radius:12px;
       display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
-      margin:0;padding:5px 2px;
+      margin:0;padding:6px 2px;
     }
     .navbtn svg{width:22px;height:22px;flex:0 0 auto}
     /* The label is the button's own tooltip -- no second copy to keep in sync. */
-    .navbtn::after,.avatar::after{
+    .navbtn::after{
       content:attr(title);font-size:10px;font-weight:600;line-height:1;
       max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     }
-    /* Until a server icon loads the avatar has nothing to draw, and on a tab bar
-       an invisible tab is an unusable one -- so it keeps a placeholder disc that
-       the icon replaces. `title` is "账户 / 退出", too long for a 76px tab. */
-    .avatar{overflow:visible;background:none;border:0}
-    .avatar::before{content:'';width:22px;height:22px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line-2);flex:0 0 auto}
-    .avatar.has-icon::before{display:none}
-    .avatar::after{content:'账户';color:var(--fg-mute)}
-    .avatar img{position:static;width:22px;height:22px;border-radius:50%}
     /* The desktop selection marker is a bar off the rail's left edge; here it
        belongs over the icon. */
     .navbtn.on::before{left:50%;top:2px;transform:translateX(-50%);width:18px;height:3px}
@@ -479,8 +498,16 @@
     #preplay,#dlg{place-items:end center;padding:0}
     .ppbox,.dlgbox{
       width:100%;max-width:none;border-radius:20px 20px 0 0;border-width:1px 0 0;
-      max-height:88dvh;animation:sheet-up .26s var(--ease-out);
+      max-height:88dvh;animation:sheet-up .26s var(--ease-out);overscroll-behavior:contain;
     }
+    /* A sheet needs to look grabbable before anyone tries to grab it. */
+    .ppbox::before,.dlgbox::before,#ctx::before{
+      content:'';display:block;width:36px;height:4px;border-radius:4px;
+      background:var(--line-2);margin:8px auto 2px;flex:0 0 auto;
+    }
+    .ppclose{width:44px;height:44px}
+    .lsrv .sx{width:40px;height:40px;font-size:19px}
+    .abtn,.backbtn{min-height:44px;display:inline-flex;align-items:center;justify-content:center}
     .ppbox{padding-bottom:env(safe-area-inset-bottom)}
     .dlgbox{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
     .ppfoot{padding:16px 20px calc(20px + env(safe-area-inset-bottom))}
@@ -513,8 +540,21 @@
      is already forced visible above, but 28px is below every platform's tap
      minimum (44 Apple, 48 Material). */
   @media (pointer:coarse){
-    .cmore{width:38px;height:38px;font-size:19px;top:5px;right:5px}
-    .navbtn:hover,.backbtn:hover,.abtn:hover{background:none}
+    .cmore{width:44px;height:44px;font-size:20px;top:4px;right:4px}
+    .navbtn:hover,.backbtn:hover,.abtn:hover,.topicon:hover{background:none}
+    .topicon{width:42px;height:42px}
+    /* Long-press IS the card menu on a touch screen (see longPressCtx in the
+       script). iOS answers the very same gesture with its own selection callout,
+       so without this the two menus fight and the poster's title comes up
+       highlighted underneath ours. Scoped to coarse pointers so a mouse can
+       still select the episode synopsis it is sitting on. */
+    .card,.gcell,.libcard,.ep,.stab,.gchip,#ctx{
+      -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+    }
+    /* Deliberately NO touch-action here: a .card lives inside a horizontally
+       scrolling rail, and pan-y would stop that rail from scrolling at all. The
+       long-press handler already bows out on any movement over 12px, which is
+       what actually needs to happen.  */
   }
 </style>
 
@@ -538,10 +578,14 @@
     <div class="brand" id="brandBtn"><img src="./icon.png" alt="LinWeb"></div>
     <button class="navbtn on" data-view="home" title="首页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg></button>
     <button class="navbtn" data-view="library" title="媒体库"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
-    <button class="navbtn" data-view="admin" id="adminBtn" title="服务器管理" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></button>
+    <!-- One button, not two. The account used to live on its own avatar down at
+         the bottom (whose only action was "log out") while this one was hidden
+         from anybody who was not an admin -- so a normal account had a rail with
+         a dead corner and no way to see which server it was even on. They are
+         the same subject: this is where you are signed in and what you can do
+         about it. The admin-only CARDS inside still gate themselves. -->
+    <button class="navbtn" data-view="admin" id="adminBtn" title="服务器"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></button>
     <div class="rail-sp"></div>
-    <button class="navbtn" id="themeBtn" title="切换深浅"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></button>
-    <div class="avatar" id="avatarBtn" title="账户 / 退出"></div>
   </nav>
 
   <main id="view">
@@ -550,6 +594,7 @@
       <div class="spacer"></div>
       <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><input id="topSearch" placeholder="搜索影片、剧集、演员…"></div>
       <span class="pill" id="serverPill">◉ 未连接</span>
+      <button class="topicon" id="themeBtn" title="切换深浅" aria-label="切换深浅"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></button>
     </header>
 
     <div class="view-pane on" id="v-home">
@@ -629,7 +674,7 @@ const toast = (m, err) => { const t = $('#toast'); t.textContent = m; t.classNam
 
 // ---------- theme ----------
 (function initTheme(){ const t = store.get('theme',''); if (t) document.documentElement.dataset.theme = t; })();
-$('#themeBtn').onclick = () => { const cur = document.documentElement.dataset.theme; const dark = cur === 'light' || (!cur && !matchMedia('(prefers-color-scheme: light)').matches);
+$('#themeBtn').onclick = () => { const cur = document.documentElement.dataset.theme;
   const next = (cur ? cur === 'dark' : !matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark';
   document.documentElement.dataset.theme = next; store.set('theme', next); };
 
@@ -670,7 +715,8 @@ async function renderHome(){
   crumb('首页');
   try {
     views = await EM.views();
-    const resume = await EM.resume();
+    // Scoped to the visible libraries on purpose -- see resume() in client.js.
+    const resume = await EM.resume(views.map(v => v.Id));
     const rails = $('#rails');
     let html = rail('继续观看', resume, true);
     // one "最近添加" rail per real library (movies/tv first)
@@ -858,6 +904,7 @@ async function openDetail(id){
   const D = $('#detail'); D.classList.add('open'); $('#dBody').innerHTML=''; $('#dHead').innerHTML='';
   $('.dscroll').scrollTop=0;
   try {
+    openLayer('detail', closeDetailNow);
     const it = keep(await EM.item(id));
     $("#dHeroBg").style.cssText = backdropBg(it);
     const isS = it.Type==='Series';
@@ -916,7 +963,12 @@ async function loadEpisodes(series, seasonId){
     list.querySelectorAll('.ep').forEach(el=>el.onclick=()=>openPreplayFor(el.dataset.ep, eps.find(e=>e.Id===el.dataset.ep)));
   } catch (e) { list.innerHTML=''; fail(e); }
 }
-function closeDetail(){ $('#detail').classList.remove('open'); }
+// Two names on purpose, and the same split repeats for every overlay below:
+// *Now is the real DOM close and is what the back button runs; the plain name is
+// what the UI calls, and it routes through history so both paths agree. Every
+// existing call site keeps the plain name and needed no change.
+function closeDetailNow(){ $('#detail').classList.remove('open'); }
+function closeDetail(){ dismiss('detail'); }
 $('#dclose').onclick = closeDetail;
 
 // ---------- pre-play chooser (版本 / 音频 / 字幕) + persistence ----------
@@ -959,9 +1011,11 @@ async function openPreplayFor(id, known, fromStart){
     $('#ppBody').innerHTML = chooserHTML(it);
     wireChooser(it);
     $('#preplay').classList.add('open');
+    openLayer('preplay', closePreplayNow);
   } catch (e) { fail(e); }
 }
-function closePreplay(){ $('#preplay').classList.remove('open'); }
+function closePreplayNow(){ $('#preplay').classList.remove('open'); }
+function closePreplay(){ dismiss('preplay'); }
 $('#ppClose').onclick = closePreplay; $('#ppCancel').onclick = closePreplay;
 $('#preplay').onclick = e => { if (e.target.id==='preplay') closePreplay(); };
 $('#ppGo').onclick = async () => {
@@ -1059,7 +1113,8 @@ const CTX = $('#ctx');
 let ctxItem = null;
 let ctxOpenedAt = 0;      // guards against the auto-scroll that a click on ⋯ triggers
 
-function closeCtx(){ CTX.classList.remove('open'); ctxItem = null; }
+function closeCtxNow(){ CTX.classList.remove('open'); ctxItem = null; }
+function closeCtx(){ dismiss('ctx'); }
 
 // One error path for every action, so a 403/404 reads as what it is.
 async function act(promise, okMsg){
@@ -1115,6 +1170,7 @@ function openCtx(x, y, it){
     : r.grp ? `<div class="grp">${r.grp}</div>`
     : `<div class="ci${r.danger?' danger':''}" data-k="${r.k}"><span class="k">${r.i}</span><span>${r.t}</span>${r.on?'<span class="on">●</span>':''}</div>`).join('');
   CTX.classList.add('open');
+  openLayer('ctx', closeCtxNow);
   ctxOpenedAt = performance.now();
   // clamp into the viewport rather than letting the menu run off the edge
   const b = CTX.getBoundingClientRect();
@@ -1217,8 +1273,9 @@ async function ctxRun(k, it){
 
 // ---------- dialogs --------------------------------------------------------
 const DLG = $('#dlg');
-const openDlg = html => { $('#dlgBox').innerHTML = html; DLG.classList.add('open'); };
-const closeDlg = () => DLG.classList.remove('open');
+const openDlg = html => { $('#dlgBox').innerHTML = html; DLG.classList.add('open'); openLayer('dlg', closeDlgNow); };
+function closeDlgNow(){ DLG.classList.remove('open'); }
+function closeDlg(){ dismiss('dlg'); }
 DLG.onclick = e => { if (e.target === DLG) closeDlg(); };
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -1370,15 +1427,67 @@ const fill = (id, html, count) => {
 };
 const load = async (id, fn) => { try { await fn(); } catch (e) { fill(id, blocked(e)); } };
 
+// The account card. Everything on it comes from the live session and
+// localStorage, so it is the one card on this page that can never come back
+// "unavailable" -- which is exactly why the account was moved in here. It used
+// to be an avatar in the rail whose only action was "log out", on a page a
+// non-admin could not even open.
+function accountCard(){
+  const lines = EM.allLines();
+  const list = servers.all();
+  const initial = (EM.userName || hostOf(EM.home) || '?')[0].toUpperCase();
+  const rows = list.map((s, i) => `<div class="arow" data-srv="${i}" style="cursor:pointer">
+      <div class="grow"><div class="nm">${esc(hostOf(s.url))}${s.userName ? ' · ' + esc(s.userName) : ''}${s.url === EM.home ? ' <span class="atag ok">当前</span>' : ''}</div>
+        <div class="sub">${esc(s.url)}${s.lines?.length ? ` · ${s.lines.length} 条线路` : ''}</div></div>
+      <span class="atag${s.token ? ' ok' : ''}">${s.token ? '已登录' : '需密码'}</span>
+      ${s.url === EM.home ? '' : `<button class="abtn danger" data-forget="${i}">忘记</button>`}</div>`).join('');
+  return `<div class="acard" id="aAccount"><div class="ahead"><h3>账户</h3><span class="sp"></span>
+      <button class="abtn" id="acAdd">切换 / 添加</button><button class="abtn danger" id="acOut">退出登录</button></div>
+    <div class="body">
+      <div class="acc"><div class="ai">${esc(initial)}<img alt=""></div>
+        <div class="grow"><div class="an">${esc(EM.userName || '已连接')}
+          ${EM.isAdmin ? '<span class="atag ok">管理员</span>' : '<span class="atag">普通账号</span>'}</div>
+          <div class="as">${esc(EM.home)}</div></div></div>
+      ${lines.length > 1 ? `<div class="asub">线路</div><div class="alines">${lines.map(l =>
+        `<button class="abtn${l.url === EM.server ? ' on' : ''}" data-line="${esc(l.url)}">${esc(l.name)}</button>`).join('')}</div>` : ''}
+      <div class="asub">已记住的服务器</div>
+      ${rows || '<div class="ablocked">只有当前这一台。</div>'}
+    </div></div>`;
+}
+function wireAccountCard(){
+  const list = servers.all();
+  tryIcons($('#aAccount .ai img'), EM.icons());
+  $('#acAdd').onclick = () => showLogin();
+  $('#acOut').onclick = () => { if (confirm(`退出登录 ${EM.userName || ''}?`)) { EM.logout(); location.reload(); } };
+  // Switching the line re-points the session at another way in to the SAME Emby;
+  // nothing needs reloading but the things that name it.
+  document.querySelectorAll('#aAccount [data-line]').forEach(b => b.onclick = () => {
+    EM.useLine(b.dataset.line); paintPill(); paintServerBtn(); renderAdmin(); toast(`已切换线路：${b.textContent}`);
+  });
+  document.querySelectorAll('#aAccount [data-forget]').forEach(b => b.onclick = e => {
+    e.stopPropagation();                       // the row behind it means "switch to this one"
+    const s = list[+b.dataset.forget]; if (!s) return;
+    servers.forget(s.url); renderAdmin();
+  });
+  document.querySelectorAll('#aAccount [data-srv]').forEach(el => el.onclick = () => {
+    const s = list[+el.dataset.srv];
+    if (!s || s.url === EM.home) return;
+    const c = EmbyClient.from(s);              // token survived logout -> straight back in
+    if (c) { EM = c; enterApp(); toast(`已切换到 ${hostOf(s.url)}`); }
+    else { showLogin(); }                      // no token -> it still needs the password
+  });
+}
+
 async function renderAdmin(){
   crumb('服务器管理');
-  $('#admWho').textContent = `${EM.userName || ''} · ${EM.isAdmin ? '管理员' : '普通账号（只读）'}`;
-  $('#admGrid').innerHTML =
-    admCard('aOverview','服务器') + admCard('aLibs','媒体库','<button class="abtn" id="aScanAll">扫描全部</button>')
+  $('#admWho').textContent = hostOf(EM.home);
+  $('#admGrid').innerHTML = accountCard()
+    + admCard('aOverview','服务器') + admCard('aLibs','媒体库','<button class="abtn" id="aScanAll">扫描全部</button>')
     + admCard('aUsers','用户') + admCard('aTasks','计划任务')
     + admCard('aSessions','活动会话','<button class="abtn" id="aSessRe">刷新</button>')
     + admCard('aDevices','设备') + admCard('aLog','活动日志','') ;
   document.getElementById('aLog').classList.add('wide');
+  wireAccountCard();
 
   load('aOverview', async () => {
     const [info, counts] = await Promise.all([EM.systemInfo(), EM.itemCounts().catch(()=>null)]);
@@ -1459,6 +1568,82 @@ async function renderAdmin(){
   });
 }
 
+// ---------- overlay layers vs. the system back button ----------
+// On a phone, back is how you close things. Without this, backing out of the
+// detail page left LinWeb altogether -- the single most jarring thing about the
+// old phone build, and the reason it read as a shrunk desktop rather than an app.
+//
+// One history entry per open layer. The entries are FUNGIBLE: nothing here cares
+// which entry belongs to which layer, only that there are at least as many
+// entries as open layers. That is what makes the awkward sequence safe -- the
+// card menu closing while the dialog it just opened pushes its own entry ends up
+// balanced either way, so a later back press can never fall through and exit.
+const LAYERS = [];
+let owedPops = 0;               // pops we asked for ourselves and must not act on
+function openLayer(name, close){
+  if (LAYERS.some(l => l.name === name)) return;   // re-opening the same layer is not a new entry
+  LAYERS.push({ name, close });
+  try { history.pushState({ linweb: name }, ''); } catch {}
+}
+// Closing from the UI. Does the real close, then hands the entry back, so the
+// close button and the back gesture leave the history in the same state.
+function dismiss(name){
+  const i = LAYERS.findIndex(l => l.name === name);
+  if (i < 0) return;
+  const [l] = LAYERS.splice(i, 1);
+  l.close();
+  owedPops++;
+  try { history.back(); } catch { owedPops--; }
+}
+addEventListener('popstate', () => {
+  if (owedPops > 0) { owedPops--; return; }        // our own history.back() coming home
+  LAYERS.pop()?.close();                           // a real back press: shut the top layer
+});
+// Tear every layer down without touching history. For the moments the session
+// itself goes away underneath them: a token that expires inside loadEpisodes
+// throws to fail(), which calls showLogin() -- and the detail page it was
+// loading into is still open, at a lower z-index than the login sheet. Logging
+// back in then revealed the app underneath a detail page nobody could close.
+// The spare history entries are left behind on purpose: spending them means
+// racing a re-login against an async history.go(), and an unused entry costs one
+// dead back press in an already-exceptional flow.
+function closeAllLayers(){
+  while (LAYERS.length) LAYERS.pop().close();
+  owedPops = 0;
+}
+
+// Drag the detail page down to dismiss it -- the gesture every phone OS uses for
+// a sheet. Only from the very top of its scroll: anywhere below that a downward
+// drag is the reader scrolling back up, and stealing it would feel stuck.
+(function swipeDownDetail(){
+  const D = $('#detail'), scroll = D.querySelector('.dscroll');
+  let x0 = 0, y0 = 0, dy = 0, active = false;
+  const reset = () => { D.classList.remove('dragging'); D.style.transform = ''; D.style.opacity = ''; };
+  D.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch' || !D.classList.contains('open') || scroll.scrollTop > 0) return;
+    x0 = e.clientX; y0 = e.clientY; dy = 0; active = true;
+  }, { passive: true });
+  D.addEventListener('pointermove', e => {
+    if (!active) return;
+    dy = e.clientY - y0;
+    // a sideways drag belongs to the cast rail underneath, not to us
+    if (Math.abs(e.clientX - x0) > Math.abs(dy)) { active = false; reset(); return; }
+    if (dy <= 0) { reset(); return; }
+    D.classList.add('dragging');
+    D.style.transform = `translateY(${dy}px)`;
+    D.style.opacity = String(Math.max(.35, 1 - dy / (innerHeight * .8)));
+  }, { passive: true });
+  const end = () => {
+    if (!active) return;
+    active = false;
+    const go = dy > 110;
+    reset(); dy = 0;
+    if (go) { navigator.vibrate?.(8); dismiss('detail'); }
+  };
+  D.addEventListener('pointerup', end);
+  D.addEventListener('pointercancel', end);
+})();
+
 // ---------- router ----------
 const VIEWS = { home:'v-home', library:'v-lib', search:'v-search', admin:'v-admin' };
 function crumb(...parts){ $('#crumbs').innerHTML = parts.map(p=>`<b>${p}</b>`).join(' <span style="opacity:.5">›</span> '); }
@@ -1486,7 +1671,13 @@ $('#view').addEventListener('scroll', () => {
 // The collapsed search is 44px of icon with a zero-width field inside it, so the
 // tap has to be handed on to the input that the CSS then expands.
 $('.search').addEventListener('click', () => $('#topSearch').focus());
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); if (DLG.classList.contains('open')) closeDlg(); else { closePreplay(); closeDetail(); } } });
+// Escape peels exactly one layer, the topmost -- the same thing the back button
+// does. It used to close several at once, which now would also hand back several
+// history entries for one keypress.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !LAYERS.length) return;
+  dismiss(LAYERS[LAYERS.length - 1].name);
+});
 
 // ---------- errors ----------
 // A HTTPS page is forbidden by the browser from fetching a http:// origin — the
@@ -1520,6 +1711,7 @@ function fail(e){
 
 // ---------- login ----------
 async function showLogin(){
+  closeAllLayers();                    // nothing may outlive the session it belongs to
   $('#app').classList.add('hidden'); $('#login').classList.add('open');
   renderServers();
   const last = servers.all()[0];
@@ -1590,36 +1782,42 @@ $('#lGo').onclick = async () => {
 };
 [$('#lUser'),$('#lPass')].forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') $('#lGo').click(); }));
 
-$('#avatarBtn').onclick = () => { if (confirm(`退出登录 ${EM?.userName||''}?`)) { EM.logout(); location.reload(); } };
-
 function enterApp(){
+  closeAllLayers();                    // and a server switch starts from a clean slate too
   $('#login').classList.remove('open'); $('#app').classList.remove('hidden');
   paintPill();
-  $('#avatarBtn').title = `${EM.userName} · 点击退出`;
-  $('#avatarBtn').innerHTML = '<img alt="">';
-  tryIcons($('#avatarBtn img'), EM.icons());   // server branding, else the user's avatar
+  paintServerBtn();
   go('home');
   // Refresh the line list in the background; play.html reads it from the same
   // remembered-server record. Best-effort: a server without the add-on has none.
   EM.syncLines().then(l => { if (l.length) { paintPill(); toastLines(l.length); } }).catch(()=>{});
-  // The admin rail button is gated on the CURRENT policy, re-read from the
-  // server: a restored session can predate the field, and an account can be
-  // promoted or demoted between visits.
-  $('#adminBtn').hidden = !EM.isAdmin;
-  EM.refreshPolicy().then(() => { $('#adminBtn').hidden = !EM.isAdmin; });
+  // The 服务器 tab itself is NOT gated any more -- it is where the account lives,
+  // and a non-admin needs it just as much. Only the admin CARDS inside are
+  // policy-dependent, and each already reports its own refusal. Still re-read the
+  // policy: a restored session can predate the field, and an account can be
+  // promoted or demoted between visits, which changes what those cards offer.
+  EM.refreshPolicy().then(() => { if ($('#v-admin').classList.contains('on')) renderAdmin(); });
+}
+// The rail's server button wears the server's own branding once one loads.
+function paintServerBtn(){
+  const b = $('#adminBtn');
+  b.classList.remove('has-icon');
+  b.querySelector('img')?.remove();
+  b.insertAdjacentHTML('beforeend', '<img alt="">');
+  tryIcons(b.querySelector('img'), EM.icons());
 }
 function paintPill(){
   const lines = EM.allLines();
   const cur = lines.find(l => l.url === EM.server);
   $('#serverPill').textContent = `◉ ${EM.userName||'已连接'}${lines.length>1?` · ${cur?.name||'线路'}`:''}`;
-  $('#serverPill').title = `${EM.server} · 点击切换服务器`;
+  $('#serverPill').title = `${EM.server} · 点击打开服务器管理`;
 }
 let toldLines = false;
 function toastLines(n){ if (toldLines) return; toldLines = true; toast(`已同步 ${n} 条线路,播放页可切换`); }
-// Switch server / account without logging out: the current server is a row in
-// the list, so clicking it comes straight back in.
+// The pill is a status readout, so it leads to the page that explains it rather
+// than throwing the login sheet in your face.
 $('#serverPill').style.cursor = 'pointer';
-$('#serverPill').onclick = () => showLogin();
+$('#serverPill').onclick = () => go('admin');
 
 // ---------- boot ----------
 (function boot(){
