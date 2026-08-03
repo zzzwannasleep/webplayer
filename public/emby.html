@@ -719,10 +719,13 @@ async function renderHome(){
     const resume = await EM.resume(views.map(v => v.Id));
     const rails = $('#rails');
     let html = rail('继续观看', resume, true);
-    // one "最近添加" rail per real library (movies/tv first)
-    const media = views.filter(v => ['movies','tvshows','mixed','boxsets','music'].includes(v.CollectionType) || !v.CollectionType);
-    const latests = await Promise.all(media.slice(0,6).map(v => EM.latest(v.Id, 20).then(items => [v, items]).catch(()=>[v,[]])));
-    for (const [v, items] of latests) html += rail(`最近添加 · ${v.Name}`, items, false);
+    // One rail per library, named after the library and nothing else. Every
+    // view is asked, not a whitelist of collection types capped at six: a
+    // whitelist silently hid 家庭/音乐视频 libraries, and the cap hid whatever
+    // came seventh. Views that cannot answer /Items/Latest (live TV, playlists)
+    // fail or come back empty, and rail() already drops an empty rail.
+    const latests = await Promise.all(views.map(v => EM.latest(v.Id, 20).then(items => [v, items]).catch(()=>[v,[]])));
+    for (const [v, items] of latests) html += rail(v.Name, items, false);
     rails.innerHTML = html || '<div class="empty">这个账户下还没有媒体库内容。</div>';
     bindCards(rails);
     // hero = first resumable or first latest movie with a backdrop

@@ -84,8 +84,17 @@ window.fetch = async (u) => {
   const p = new URL(url); const q = p.searchParams; let body = {};
   if (window.__fail401 && p.pathname.includes(window.__fail401))
     return { ok:false, status:401, url, json: async () => ({}), text: async () => '' };
-  if (p.pathname.endsWith('/Views')) body = { Items:[ {Id:'LIB-A',Name:'电影',CollectionType:'movies',ImageTags:{}},
-                                                     {Id:'LIB-B',Name:'剧集',CollectionType:'tvshows',ImageTags:{}} ] };
+  // Eight libraries on purpose, two of them collection types the home page used
+  // to filter out (homevideos / musicvideos) and two past the old cap of six.
+  if (p.pathname.endsWith('/Views')) body = { Items:[
+    {Id:'LIB-A',Name:'电影',CollectionType:'movies',ImageTags:{}},
+    {Id:'LIB-B',Name:'剧集',CollectionType:'tvshows',ImageTags:{}},
+    {Id:'LIB-C',Name:'动画',CollectionType:'tvshows',ImageTags:{}},
+    {Id:'LIB-D',Name:'纪录片',CollectionType:'movies',ImageTags:{}},
+    {Id:'LIB-E',Name:'音乐',CollectionType:'music',ImageTags:{}},
+    {Id:'LIB-F',Name:'合集',CollectionType:'boxsets',ImageTags:{}},
+    {Id:'LIB-G',Name:'家庭视频',CollectionType:'homevideos',ImageTags:{}},
+    {Id:'LIB-H',Name:'音乐视频',CollectionType:'musicvideos',ImageTags:{}} ] };
   else if (p.pathname.includes('/Items/Latest')) body = [ item('SER1','一部剧', { Type:'Series' }) ];
   else if (/\\/Seasons$/.test(p.pathname)) body = { Items:[ { Id:'SEA1', Name:'第 1 季', ImageTags:{} } ] };
   else if (/\\/Episodes$/.test(p.pathname)) body = { Items:[ item('EP1','第 1 集', { Type:'Episode', IndexNumber:1 }) ] };
@@ -139,12 +148,25 @@ check('theme toggle actually flips the theme', await evalJS(`(()=>{
 // --- 继续观看 is scoped per visible library and excludes finished items ---
 const resumeCalls = await evalJS(`window.__calls.filter(u => /Filters=IsResumable/.test(u))`);
 check('继续观看 asks once per visible library, not once for the server',
-  resumeCalls.length === 2, `${resumeCalls.length} call(s)`);
+  resumeCalls.length === 8, `${resumeCalls.length} call(s)`);
 check('every 继续观看 query is scoped to a ParentId',
   resumeCalls.every(u => /ParentId=LIB-/.test(u)), resumeCalls.join(' | '));
 check('继续观看 excludes finished items (IsUnplayed)',
   resumeCalls.every(u => /Filters=IsResumable%2CIsUnplayed|Filters=IsResumable,IsUnplayed/.test(u)),
   resumeCalls[0]);
+
+// --- the home page shows EVERY library, under its own name ---
+// Both halves were wrong before: a whitelist of collection types dropped the
+// home-video and music-video libraries entirely, and .slice(0,6) dropped
+// whatever came seventh. Every rail was also prefixed "最近添加 ·", so a
+// library called 电影 appeared as 最近添加 · 电影.
+const railTitles = await evalJS(`[...document.querySelectorAll('#rails .rail-head h2')].map(h => h.textContent)`);
+check('every library gets a rail, past the old cap of six',
+  railTitles.length === 9, `${railTitles.length} rail(s): ${railTitles.join(' | ')}`);
+check('a rail is named exactly after its library',
+  JSON.stringify(railTitles) === JSON.stringify(['继续观看', '电影', '剧集', '动画', '纪录片', '音乐', '合集', '家庭视频', '音乐视频']),
+  railTitles.join(' | '));
+check('no rail says 最近添加 any more', !railTitles.some(t => t.includes('最近添加')), railTitles.join(' | '));
 
 // --- the account card inside 服务器管理 ---
 await evalJS(`document.querySelector('#adminBtn').click()`);
