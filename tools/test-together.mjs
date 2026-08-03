@@ -139,6 +139,57 @@ console.log('\n=== relay address ===');
   delete globalThis.location;
 }
 
+// --- what the one-command launcher prints -----------------------------------
+// The launcher's whole job is to end with a correct address on screen, so the
+// two things that decide which address that is get checked here rather than by
+// running it and reading the box.
+
+console.log('\n=== launcher ===');
+{
+  const { localAddresses, findTunnelUrl, displayWidth } = await import('./together-deploy.mjs');
+
+  const ifaces = {
+    'lo':        [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
+    'docker0':   [{ family: 'IPv4', address: '172.17.0.1', internal: false }],
+    'eth0':      [{ family: 'IPv4', address: '192.168.1.9', internal: false }],
+    'eth1':      [{ family: 'IPv4', address: '203.0.113.7', internal: false }],
+    'wlan0':     [{ family: 'IPv4', address: '169.254.10.2', internal: false }],
+    'VPN':       [{ family: 'IPv4', address: '198.18.0.1', internal: false }],
+    'eth0:ipv6': [{ family: 'IPv6', address: 'fe80::1', internal: false }],
+  };
+  const picked = localAddresses(ifaces).map(a => a.address);
+  check('loopback is not offered as an address', () => assert.ok(!picked.includes('127.0.0.1')));
+  check('IPv6 is left out', () => assert.ok(!picked.some(a => a.includes(':'))));
+  // 169.254.x is what an OS invents when DHCP failed. Printing it sends someone
+  // off to debug the relay when the machine has no working network at all.
+  check('a self-assigned 169.254 address is left out', () => assert.ok(!picked.some(a => a.startsWith('169.254'))));
+  // RFC 2544 benchmarking space. Real machines only have one of these because a
+  // VPN client invented a fake adapter, and it was outranking the real LAN card.
+  check('a 198.18 VPN pseudo-address is left out', () => assert.ok(!picked.some(a => a.startsWith('198.18'))));
+  check('a real LAN address comes first', () => assert.equal(picked[0], '192.168.1.9'));
+  // docker0 is a private address too, so the private-first rule alone would
+  // float it to the top on any server running Docker.
+  check('a docker bridge sinks below the real ones', () => assert.equal(picked.at(-1), '172.17.0.1'));
+  check('no interfaces at all is not a crash', () => assert.deepEqual(localAddresses({}), []));
+
+  // cloudflared has moved this line around between versions; matching the
+  // hostname anywhere in the output survives that.
+  const cfLog = `2026-08-03T06:00:00Z INF +--------------------------------------+
+2026-08-03T06:00:00Z INF |  https://weird-lamp-echo-42.trycloudflare.com  |
+2026-08-03T06:00:00Z INF +--------------------------------------+`;
+  check('the tunnel address is found inside the banner',
+    () => assert.equal(findTunnelUrl(cfLog), 'https://weird-lamp-echo-42.trycloudflare.com'));
+  check('a bare line works too',
+    () => assert.equal(findTunnelUrl('your url is https://a-b-c.trycloudflare.com now'), 'https://a-b-c.trycloudflare.com'));
+  check('no address in the output is null, not a wrong guess',
+    () => assert.equal(findTunnelUrl('INF Starting tunnel...'), null));
+  check('a lookalike host is not mistaken for it',
+    () => assert.equal(findTunnelUrl('https://trycloudflare.com.evil.test'), null));
+
+  check('CJK counts as two columns so the box does not skew',
+    () => { assert.equal(displayWidth('一起看'), 6); assert.equal(displayWidth('abc'), 3); });
+}
+
 // --- frame codec ------------------------------------------------------------
 
 console.log('\n=== websocket framing ===');

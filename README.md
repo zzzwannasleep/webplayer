@@ -353,7 +353,7 @@ canvas 引擎:一集三千多条弹幕,DOM 引擎就是三千多个动画节点�
 | | 怎么跑 | 代价 |
 |---|---|---|
 | Cloudflare Worker | `cd worker && npx wrangler deploy` | 要一个 Cloudflare 账号。免费额度每天 10 万次请求 / 13000 GB-s,一个 8 人房间一晚上用掉的是低四位数 |
-| 自建 Node | `npm run together`(默认 23686 端口) | 要一台别人能访问到的机器。零依赖,连 `ws` 都没装 |
+| 自建 Node | `npm run together`(跑完把该粘的地址框出来;加 `-- --tunnel` 顺便开条隧道给公网地址) | 要一台机器。零依赖,连 `ws` 都没装 |
 
 两边说的是同一套协议(`src/together/relay.js` 是共用的那部分逻辑),所以换一边房间
 不会有任何区别;你自己再写一个也行,协议写在 `src/together/room.js` 顶部。

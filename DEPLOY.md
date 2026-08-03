@@ -458,14 +458,16 @@ npx wrangler deploy
 ## 选择 2 · 自己的机器(不用 Cloudflare 账号)
 
 ```bash
-node tools/together-server.mjs        # 默认 23686
-PORT=9000 node tools/together-server.mjs
+npm run together                      # 起中转,并把该粘贴的地址框出来
+npm run together -- --tunnel          # 顺便开条隧道,给一条公网 https 地址
+PORT=9000 npm run together            # 换端口
 ```
 
-零依赖,不用 `npm install`,和静态站是两个独立进程。
+零依赖,不用 `npm install`,和静态站是两个独立进程。跑完屏幕上会有一个框,里面那条
+地址直接复制,粘进播放页右侧的「一起看」卡片就行。
 
-想常驻就照着本文最后 **常驻运行** 那节办(systemd / pm2 / 计划任务都行),把命令换成
-上面这条。
+想常驻就照着本文最后 **常驻运行** 那节办(systemd / pm2 / 计划任务都行),命令换成
+`node tools/together-server.mjs`(裸服务,不需要那层打印地址的封装)。
 
 **⚠️ https 的页面只能连 `wss://`。** 这个脚本自己不做 TLS,要挂在你已有的反代或
 Cloudflare Tunnel 后面。nginx 的话,和方式 D 里那段 WebSocket 配置是同一套写法:

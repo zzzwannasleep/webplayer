@@ -122,7 +122,7 @@ export class TogetherPanel {
     // section: the first thing anyone needs is to know that pasting the address
     // their host printed -- https:// and all -- is the correct thing to do.
     this.relayHint = el('p', { className: 'tgp-note',
-      textContent: 'https:// 或 wss:// 都行，直接粘贴部署时拿到的地址。还没有中转？见 DEPLOY-TOGETHER.md，Cloudflare 一条命令，或者自己机器上 npm run together。' });
+      textContent: 'https:// 或 wss:// 都行，直接粘贴部署时拿到的地址。还没有中转？两条命令二选一：自己机器上 npm run together，或者 cd worker && npx wrangler deploy。都会把该粘的地址打出来，细节见 DEPLOY-TOGETHER.md。' });
 
     this.who = el('input', { type: 'text', placeholder: '你的昵称',
       value: this.s.name || NAMES[Math.floor(Math.random() * NAMES.length)] });

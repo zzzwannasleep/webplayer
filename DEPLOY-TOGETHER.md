@@ -87,14 +87,59 @@ Durable Objects。
 
 ---
 
-# 路线 B · 自己的机器
+# 路线 B · 自己的机器（一条命令）
 
 ```bash
-node tools/together-server.mjs          # 默认 23686
-PORT=9000 node tools/together-server.mjs
+npm run together
 ```
 
-零依赖，**不用 `npm install`**。和静态站是两个独立进程，互不影响。
+零依赖，**不用 `npm install`**（这个仓库的依赖是给构建用的，中转一个都不需要）。
+它会起中转、**等它真的听上端口**、然后把该粘贴的那条地址框出来：
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ 一起看中转已启动（仅局域网）                                 │
+│                                                              │
+│ 把下面这条粘进播放页右侧「一起看」卡片：                     │
+│                                                              │
+│     http://192.168.1.9:23686                                 │
+│                                                              │
+│ ⚠ 局域网地址，只有和这台机器在同一个网络里的人连得上。       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+复制那条，粘进播放页右侧的「一起看」卡片，完事。
+
+（先等端口听上再打印，是因为反过来的话端口被占时也会先打出一条看着很正常的地址，
+人复制走了才发现根本连不上。）
+
+## 三种用法
+
+```bash
+npm run together                                      # 只在局域网里
+npm run together -- --tunnel                          # 顺便开隧道，给一条公网 https 地址
+npm run together -- --url https://together.example    # 你已经有反代/域名了，直接打印它
+PORT=9000 npm run together                            # 换端口
+```
+
+**`--tunnel` 得自己加，不会因为装了 cloudflared 就自动开** —— 开隧道等于把这台机器上
+的一个服务挂到公网上，那是个对外的动作，不该由一个启动脚本替你做主。加了之后它调
+`cloudflared tunnel --url`，把那条地址打出来：
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ 一起看中转已启动（公网可达）                                 │
+│                                                              │
+│     https://weird-lamp-echo-42.trycloudflare.com             │
+│                                                              │
+│ ⚠ 脚本一停隧道就没了，下次再开会换一个新地址。               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+没装 cloudflared 的话它会把三个平台的安装命令打出来，同时中转照常在局域网上跑着 ——
+不会因为隧道开不起来就整个失败。
+
+想跳过这层封装直接跑裸服务：`npm run together:raw`。
 
 启动后本机自测：
 
@@ -161,6 +206,8 @@ Description=LinWeb 一起看 relay
 After=network.target
 
 [Service]
+# 裸服务，不是 together-deploy.mjs：后者只是为了把地址打给人看，
+# systemd 下没人看那个框，重启也由 systemd 自己管
 ExecStart=/usr/bin/node /opt/webplayer/tools/together-server.mjs
 Environment=PORT=23686
 Restart=always
@@ -205,6 +252,9 @@ docker run -d --restart unless-stopped -p 23686:23686 linweb-together
 把 `tools/together-server.mjs`（和它依赖的 `src/together/relay.js`）推上去，启动命令
 `node tools/together-server.mjs`，端口读 `PORT` 环境变量 —— 这三点是所有平台的通用要求，
 这个脚本都满足了。
+
+⚠️ 这里用**裸服务**，不是 `npm run together`。后者是给人看地址用的封装，托管平台自己
+会给你域名，不需要它 —— 而且它会在前台等着，有些平台会因此判定启动没完成。
 
 ## ⚠️ 先看这条：免费档「休眠」会掐断连接
 

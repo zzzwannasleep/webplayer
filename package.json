@@ -6,11 +6,12 @@
   "type": "module",
   "scripts": {
     "serve": "node tools/serve.mjs .",
-    "together": "node tools/together-server.mjs",
+    "together": "node tools/together-deploy.mjs",
     "samples": "node tools/make-samples.mjs",
     "build": "node tools/build-vendor.mjs && node tools/build-site.mjs",
     "deploy": "node tools/deploy.mjs",
-    "test": "node tools/test-docker.mjs && node tools/test-demux.mjs && node tools/test-containers.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs && node tools/test-danmaku.mjs && node tools/test-together.mjs && node --experimental-webstorage --localstorage-file=.linweb-test-ls --no-warnings tools/test-emby.mjs"
+    "test": "node tools/test-docker.mjs && node tools/test-demux.mjs && node tools/test-containers.mjs && node tools/test-boxes.mjs && node tools/test-remux.mjs && node tools/test-codecs.mjs && node tools/test-pgs.mjs && node tools/test-pgsfeed.mjs && node tools/test-httpsource.mjs && node tools/test-srt.mjs && node tools/test-danmaku.mjs && node tools/test-together.mjs && node --experimental-webstorage --localstorage-file=.linweb-test-ls --no-warnings tools/test-emby.mjs",
+    "together:raw": "node tools/together-server.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
