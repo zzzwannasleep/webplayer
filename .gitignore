@@ -52,3 +52,8 @@ FirefoxPortable/
 # Throwaway localStorage-seeding pages used to drive real-server UI checks.
 # They hold live tokens: never committable.
 public/_*.html
+
+# Wrangler's local dev state (`wrangler dev`). Regenerated on demand, and the
+# cf.json inside it caches the REAL network fingerprint of whoever ran it --
+# ASN, city, postal code, lat/long, TLS randoms. That must never reach a commit.
+worker/.wrangler/

@@ -1,0 +1,19 @@
+# 一起看 relay. Deploy with:  cd worker && npx wrangler deploy
+#
+# Change `name` if you want a different *.workers.dev subdomain. Nothing here
+# is secret -- the room code is the only thing that decides who is in a room,
+# and it is typed in by hand, never committed.
+name = "linweb-together"
+main = "watch-together.js"
+compatibility_date = "2026-01-01"
+
+[[durable_objects.bindings]]
+name = "WATCH_ROOM"
+class_name = "WatchRoom"
+
+# SQLite-backed Durable Objects are the ones the free plan allows. No table is
+# ever created -- the relay keeps what little it needs on the sockets -- but
+# the class still has to be declared under the SQLite migration to be free.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WatchRoom"]

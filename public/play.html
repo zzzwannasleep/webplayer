@@ -197,6 +197,7 @@
           <span class="vtime"><span id="tNow">0:00</span> <i>/</i> <span id="tEnd">0:00</span></span>
           <div class="vspacer"></div>
           <button class="vbtn" id="dmkBtn" aria-label="弹幕开关" title="弹幕开关（搜索和设置在右侧弹幕栏）" aria-pressed="false" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 10h5"/><path d="M13 10h5"/><path d="M6 14h3"/><path d="M11 14h7"/></svg></button>
+          <button class="vbtn" id="tgBtn" aria-label="一起看" title="一起看（房间、聊天和语音在右侧栏）" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></button>
           <div class="menu-wrap">
             <button class="vbtn" id="gearBtn" aria-label="设置：字幕 · 倍速 · 轨道" title="设置：字幕 · 倍速 · 轨道" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             <div class="menu" id="picks" role="menu" hidden></div>
@@ -234,6 +235,7 @@ import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
 import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
 import { DanmakuLayer, loadRenderer } from '../src/danmaku/index.js';
 import { DanmakuPanel, panelStyles } from '../src/danmaku/panel.js';
+import { TogetherPanel, panelStyles as togetherStyles } from '../src/together/panel.js';
 
 const $ = s => document.querySelector(s);
 const video = $('#video');
@@ -453,7 +455,7 @@ const NATIVE_WHY = {
 // current value, each opening into its own controls. Choices live HERE, in
 // CHOICE, not in the DOM -- a control inside a closed panel does not exist.
 const menu = new SettingsMenu($('#picks'));
-document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() + panelStyles() }));
+document.head.append(Object.assign(document.createElement('style'), { textContent: menuStyles() + touchStyles() + panelStyles() + togetherStyles() }));
 
 const CHOICE = { video: 0, audio: 0, sub: -1, gain: '1' };
 const label = (x, i) => x.label || `轨道 ${i + 1}`;
@@ -461,6 +463,10 @@ const label = (x, i) => x.label || `轨道 ${i + 1}`;
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
 let rate = 1;
 let extOn = false;          // the Emby-served <track> is the subtitle showing
+// Declared here, built far below with the rest of the sidebar: setRate() runs
+// before that point and `const` in between would be a temporal-dead-zone throw
+// rather than the `undefined` the optional chaining expects.
+let tg = null;
 
 // defaultPlaybackRate as well as playbackRate: the media load algorithm resets
 // the latter to the former, and every track switch reloads the src -- set only
@@ -468,6 +474,10 @@ let extOn = false;          // the Emby-served <track> is the subtitle showing
 function setRate(v) {
   rate = Number(v);
   video.defaultPlaybackRate = video.playbackRate = rate;
+  // In a room the speed is a shared fact, and the sync loop owns playbackRate
+  // (it nudges it a few percent to absorb drift). Telling it the new base rate
+  // both propagates the choice and stops the next correction from undoing it.
+  tg?.sync.setRate(rate);
   paintMenu();
 }
 
@@ -592,6 +602,30 @@ let dmk = null;
 })();
 
 $('#dmkBtn').addEventListener('click', () => dmk?.toggle());
+
+// ---- 一起看 --------------------------------------------------------------
+// A room is a relay address, a code, a member list, chat and a microphone --
+// all of which are typing and lists, so it is a sidebar card like danmaku, and
+// the toolbar button only scrolls to it. See src/together/panel.js.
+//
+// Nothing about the relay is in this repository. The address lives in
+// localStorage, exactly like the Emby servers, and an invite link carries it in
+// the URL FRAGMENT so it is never sent to whatever is hosting these files.
+tg = new TogetherPanel(video, { log: player.log, button: $('#tgBtn'), title: WANT.title || '' });
+$('#logCard').before(tg.el);
+{
+  const invite = TogetherPanel.inviteFromHash();
+  // Auto-join only when the link carried both halves. Landing in a room with
+  // somebody else's code but your own relay is a room of one.
+  if (invite?.relay) {
+    tg.relay.value = invite.relay;
+    tg.codeIn.value = invite.code;
+    tg.join(invite.code, invite.relay);
+  } else if (invite) {
+    tg.codeIn.value = invite.code;
+  }
+}
+addEventListener('pagehide', () => tg.destroy());
 
 // Dropping a file on the picture is the shortest path, so it is also wired.
 for (const ev of ['dragenter', 'dragover']) stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('dragging'); });
@@ -974,4 +1008,7 @@ else { $('#phText').textContent = '缺少播放地址，请从媒体库重新进
 
 window.player = player;
 window.subs = subs;
+// tools/test-together-ui.mjs drives a real room through this: joining, chat and
+// the sync state machine have no other observable surface from outside.
+window.tg = tg;
 </script>

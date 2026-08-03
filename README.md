@@ -200,6 +200,9 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
   以及外挂 SRT
 - 弹幕:B 站 XML 与弹弹play JSON 两种格式,canvas 渲染,按条目记住(设置进
   localStorage、弹幕本体进 IndexedDB;见下面折叠的**弹幕**一节)
+- **一起看**:房间同步播放进度、文字聊天、浏览器之间直连的实时语音。中转自己部署,
+  Cloudflare Worker 和零依赖 Node 两个版本都在仓库里;部署教程见
+  **[DEPLOY-TOGETHER.md](DEPLOY-TOGETHER.md)**,原理见下面折叠的**一起看**一节
 - 手机端:完整手势、底部标签栏、安全区适配(见上面的**手机端**)
 - Emby 接入 —— 浏览服务器、直连播放(零转码)原盘字节、双向续看、把详情页里
   选好的音轨/字幕逐轨预选并带进专用播放器。见 `public/emby.html` +
@@ -332,6 +335,87 @@ canvas 引擎:一集三千多条弹幕,DOM 引擎就是三千多个动画节点�
 整集的弹幕会一次性倒灌出来(实测 43800 个不透明像素 vs 修好后的 875)。
 `src/danmaku/index.js` 因此给渲染器传的是一层 media 代理,拿得到它自己的 `seeking`
 处理函数,重建后直接调一次。`public/dmkcheck.html` 里有这条断言。
+
+</details>
+
+<details>
+<summary><b>一起看</b> —— 中转只搬信令,语音是浏览器之间直连</summary>
+
+同步播放进度、聊天、语音,三样都在播放页右侧那张「一起看」卡片里。填一个中转地址、
+开个房间、把邀请链接发给朋友,就完了。
+
+**中转地址不在仓库里,也不在代码里。** 和 Emby 服务器一样存在 localStorage,邀请
+链接把它放在 URL 的 **fragment**(`#together=…&relay=…`)里,所以它连托管这些文件的
+服务器都到不了。
+
+### 中转怎么部署(挑一个)
+
+| | 怎么跑 | 代价 |
+|---|---|---|
+| Cloudflare Worker | `cd worker && npx wrangler deploy` | 要一个 Cloudflare 账号。免费额度每天 10 万次请求 / 13000 GB-s,一个 8 人房间一晚上用掉的是低四位数 |
+| 自建 Node | `npm run together`(默认 23686 端口) | 要一台别人能访问到的机器。零依赖,连 `ws` 都没装 |
+
+两边说的是同一套协议(`src/together/relay.js` 是共用的那部分逻辑),所以换一边房间
+不会有任何区别;你自己再写一个也行,协议写在 `src/together/room.js` 顶部。
+
+**https 页面只能连 `wss://`。** 自建版本自己不做 TLS —— 挂在你已有的反代或者
+Cloudflare Tunnel 后面。
+
+**Vercel 和 Netlify 当不了中转。** Vercel 的 WebSocket 连接跟着函数的最长执行时间
+一起断(免费档 5 分钟,一部电影要断 24 次),而且连接被钉在单个实例上、实例之间没有
+共享内存,房间里第二个人可能根本看不见第一个;Netlify Functions 干脆不支持 WebSocket。
+两家托管**播放器本身**都没问题,只是别拿来当中转。完整对照(含 Railway / Render /
+Koyeb / Deno Deploy / 免费 VPS 的现状和坑)在 [DEPLOY-TOGETHER.md](DEPLOY-TOGETHER.md)。
+
+### 中转到底搬了什么
+
+信令、进度、聊天。**语音一个字节都不经过它**:两个人交换完 SDP 之后音频就是浏览器
+直连,WebRTC 强制 DTLS-SRTP 端到端加密,中转的运维者听不到。所以中转跑在免费额度上
+不是带宽问题——它本来就没有带宽压力。
+
+语音用全网状(mesh)而不是 SFU。「mesh 超过四个人就崩」说的是**视频**:一路 Opus
+语音大约 30–40 kbit/s,八个人全开麦也就是每边四分之一兆,比影片本身小得多。换成
+SFU 意味着多一台要维护的服务器,还要让每句话都从别人的机器上过一遍,省下的是没人
+缺的那点带宽。
+
+大约一成的网络打不通直连(两端都是对称 NAT,或者公司网络把 UDP 全丢了),那种情况
+需要 TURN,而 TURN 按定义要转发音频、不可能永远免费。所以仓库里**没有**内置任何
+TURN 凭据(它们会过期,而且会被提交进仓库);面板里有一个 `iceServers` 输入框,有就
+填,没有就接受十分之一的连不上。
+
+### 进度是怎么对齐的
+
+房间里只有一个共享事实:最后一次有人明确按下的操作,盖上中转的时间戳。
+
+```
+target = paused ? pos : pos + (relayNow - at) / 1000 * rate
+```
+
+时钟对齐用 NTP 那套 ping/pong,保留 8 个样本、**取 RTT 最小的那个**而不是取平均:
+一个被排队的包只在一个方向上被延迟,均值会把这份不对称原样吃进去。
+
+漂移纠正的阈值是**为这个播放器改过的**。Jellyfin 的 SyncPlay 超过 400 ms 就直接
+seek,那是假设 seek 很便宜;在这里 seek 意味着从最近的关键帧重新解复用、重新灌
+MSE 缓冲,是好几秒的黑屏,比差 800 ms 难受得多。所以:
+
+| 偏差 | 动作 |
+|---|---|
+| < 80 ms | 什么都不做,那是测量噪声 |
+| 80 ms ~ 2.5 s | 微调 `playbackRate`,幅度封顶 ±8%(再大对白就能听出来) |
+| > 2.5 s | 才 seek —— 这是「有人跳去了另一段」,不是「我们飘了」 |
+
+谁都可以播放/暂停/seek,不设权限:一个房间就是两到八个已经在说话的人,为了暂停一下
+还要请示,比偶尔被暂停两次更难受。房主只干两件需要唯一声音的事——每 5 秒用自己真实
+的播放头重新校准房间,以及在等完缓冲之后按下播放。
+
+谁卡了,所有人一起等(Jellyfin 的 GroupWait 那一套)。不这么做的话,网络最差的那个
+人一晚上会落后一分钟,而唯一的补救是手动 seek,那又会把其他所有人一起拽走。
+
+`tools/test-together.mjs` 用假连接把协议逻辑跑一遍,再拿一个真 TCP socket 打自己
+手写的帧编解码;`tools/test-worker.mjs` 把 Cloudflare 那版跑在真的 workerd 上
+(`wrangler dev`),验 Durable Object 寻址、休眠回调、迟到成员补状态、房主交接;
+`tools/test-together-ui.mjs` 开**两个真浏览器进程**(不是两个标签页——后台标签页的
+媒体加载会被节流,第二个成员会永远停在 readyState 0),一个按播放,断言另一个跟上。
 
 </details>
 
@@ -658,6 +742,8 @@ npm test                          # 全部 Node 测试套件
 node tools/test-touch.mjs         # 手机手势:合成触摸事件打在播放器上
 node tools/test-controls.mjs      # 设置菜单:字幕选择、倍速、弹幕键的真实点击
 node tools/test-emby-ui.mjs       # Emby 浏览页:返回键 / 账户卡 / 继续观看的取数
+node tools/test-together-ui.mjs   # 一起看:开两个真浏览器,一个按播放另一个跟上
+node tools/test-worker.mjs        # 一起看:Cloudflare 中转跑在真 workerd 上(先 wrangler dev)
 
 node tools/probe-firefox.mjs      # 火狐真实能力面(codec 矩阵 + API 面)
 node tools/test-firefox.mjs       # 火狐端到端播放(必须有窗口,见下)
@@ -676,6 +762,7 @@ node tools/test-pgs.mjs           # 合成 .sup,由 ffmpeg 解码
 node tools/test-pgsfeed.mjs       # 字幕窗口边界与去重
 node tools/test-srt.mjs           # SRT -> VTT,由 ffprobe 解析回来
 node tools/test-danmaku.mjs       # 两种弹幕格式的字段顺序差异
+node tools/test-together.mjs      # 一起看:房间协议 + 手写的 WebSocket 帧编解码
 node tools/test-httpsource.mjs    # Range / 重定向 / 无长度
 ```
 

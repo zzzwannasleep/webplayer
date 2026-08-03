@@ -428,6 +428,72 @@ node tools/serve.mjs dist            # 带 Range
 
 ---
 
+# 一起看的中转(可选)
+
+**完整教程在 [DEPLOY-TOGETHER.md](DEPLOY-TOGETHER.md)** —— 包括各家托管平台能不能用
+(Vercel / Netlify **不能**,原因写在里面)、部署完怎么加进播放器、以及排查表。
+下面是最短的两条路。
+
+只有要用「一起看」才需要这一步。中转搬的是信令、进度和聊天;**语音是浏览器之间直连,
+一个字节都不过中转**,所以它没有带宽压力,免费额度足够。
+
+地址不写进代码,也不进任何提交——填在播放页右侧的「一起看」卡片里,存 localStorage。
+
+挑一个:
+
+## 选择 1 · Cloudflare Worker(不用自己有机器)
+
+```bash
+cd worker
+npx wrangler deploy
+```
+
+第一次会让你登录 Cloudflare(免费账号即可)。部署完它会打印一个
+`https://linweb-together.<你的子域>.workers.dev`,把这个地址填进播放页就行(填 http
+的也认,客户端自己换成 `wss://`)。
+
+免费额度:每天 10 万次请求、13000 GB-s。WebSocket 的每条消息算一次请求;一个 8 人
+房间看完一部电影是低四位数。用的是 WebSocket Hibernation,空房间不计费。
+
+## 选择 2 · 自己的机器(不用 Cloudflare 账号)
+
+```bash
+node tools/together-server.mjs        # 默认 23686
+PORT=9000 node tools/together-server.mjs
+```
+
+零依赖,不用 `npm install`,和静态站是两个独立进程。
+
+想常驻就照着本文最后 **常驻运行** 那节办(systemd / pm2 / 计划任务都行),把命令换成
+上面这条。
+
+**⚠️ https 的页面只能连 `wss://`。** 这个脚本自己不做 TLS,要挂在你已有的反代或
+Cloudflare Tunnel 后面。nginx 的话,和方式 D 里那段 WebSocket 配置是同一套写法:
+
+```nginx
+location /room/ {
+    proxy_pass http://127.0.0.1:23686;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;   # 见方式 D 里的 map
+    proxy_read_timeout 3600s;                          # 一部电影比默认超时长
+}
+```
+
+## 打不通直连的时候
+
+大约一成的网络(两端都是对称 NAT,或者公司网把 UDP 全丢了)建不起 P2P,语音会显示
+「打不通」。那种情况需要一台 TURN,而 TURN 要转发音频、不可能永远免费,所以仓库里
+没有内置任何凭据。有的话填进「中转与打洞」里的 `iceServers`:
+
+```json
+[{"urls":"turn:你的地址:3478","username":"u","credential":"p"}]
+```
+
+同步进度和聊天不受影响——那两样走中转,和 TURN 无关。
+
+---
+
 # Emby 跨域(CORS)配置
 
 **走方式 D(同源反代)的,同源,跳过这一节。**
