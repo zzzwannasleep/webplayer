@@ -71,7 +71,13 @@
      readable, comments are the layer you chose to add. */
   #stage canvas.A4K { z-index:1; }
   #stage canvas:not(.A4K) { z-index:3; }
-  video::cue { background:rgba(0,0,0,.55); color:#fff; }
+  /* No box behind the text. The black band the browser draws by default sits
+     over the picture for the whole cue's width, and on a wide subtitle that is
+     most of the frame. A shadow gives the same legibility over a bright scene
+     without covering anything -- ::cue accepts text-shadow, not the stroke
+     properties, so it is layered to fake an outline. */
+  video::cue { background:transparent; color:#fff;
+    text-shadow:0 0 3px #000, 0 0 3px #000, 0 1px 4px rgba(0,0,0,.95); }
 
   .placeholder {
     position:absolute; inset:0; display:flex; flex-direction:column;
