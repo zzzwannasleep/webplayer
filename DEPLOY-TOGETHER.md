@@ -94,57 +94,63 @@ npm run together
 ```
 
 零依赖，**不用 `npm install`**（这个仓库的依赖是给构建用的，中转一个都不需要）。
-它会起中转、**等它真的听上端口**、然后把该粘贴的那条地址框出来：
+
+它先问你一句：
+
+```
+要在后台跑吗？选 y 之后关掉这个窗口它也继续跑。[y/N]
+```
+
+选 `y` 就自己 detach 出去，选 `n`（或直接回车）就在前台跑、`Ctrl-C` 停。
+然后不管选哪个，都把该粘贴的那条地址框出来：
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 一起看中转已启动（仅局域网）                                 │
+│ 一起看中转已启动（后台）                                     │
 │                                                              │
 │ 把下面这条粘进播放页右侧「一起看」卡片：                     │
 │                                                              │
-│     http://192.168.1.9:23686                                 │
+│     http://192.168.1.9:31614                                 │
 │                                                              │
 │ ⚠ 局域网地址，只有和这台机器在同一个网络里的人连得上。       │
+│                                                              │
+│ 后台运行中，pid 3204。关掉这个窗口不影响它。                 │
+│ 停止：npm run together -- --stop                             │
+│ 日志：/opt/webplayer/.together.log                           │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-复制那条，粘进播放页右侧的「一起看」卡片，完事。
+复制那条地址，粘进播放页右侧的「一起看」卡片，完事。
 
-（先等端口听上再打印，是因为反过来的话端口被占时也会先打出一条看着很正常的地址，
-人复制走了才发现根本连不上。）
-
-## 三种用法
+## 全部用法
 
 ```bash
-npm run together                                      # 只在局域网里
-npm run together -- --tunnel                          # 顺便开隧道，给一条公网 https 地址
+npm run together                                      # 问你要不要后台，然后打印地址
+npm run together -- --bg                              # 直接后台，不问
+npm run together -- --fg                              # 直接前台，不问
+npm run together -- --stop                            # 停掉后台那个
 npm run together -- --url https://together.example    # 你已经有反代/域名了，直接打印它
 PORT=9000 npm run together                            # 换端口
 ```
 
-**`--tunnel` 得自己加，不会因为装了 cloudflared 就自动开** —— 开隧道等于把这台机器上
-的一个服务挂到公网上，那是个对外的动作，不该由一个启动脚本替你做主。加了之后它调
-`cloudflared tunnel --url`，把那条地址打出来：
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 一起看中转已启动（公网可达）                                 │
-│                                                              │
-│     https://weird-lamp-echo-42.trycloudflare.com             │
-│                                                              │
-│ ⚠ 脚本一停隧道就没了，下次再开会换一个新地址。               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-没装 cloudflared 的话它会把三个平台的安装命令打出来，同时中转照常在局域网上跑着 ——
-不会因为隧道开不起来就整个失败。
-
 想跳过这层封装直接跑裸服务：`npm run together:raw`。
+
+几条不太显然但会省事的：
+
+- **默认端口 31614，和站点的 23685 是分开的。** 两个东西抢一个端口，失败的方式是
+  最不好查的那种 —— 输的那个只是「不在」，不会报错说为什么。
+- **回车 = 不后台。** 后台是更难撤销的那个选择，所以不给它当默认。
+- **非交互环境下不问**（管道、CI、systemd）—— 在那里弹一个等输入的问题就是挂死，
+  所以那种情况直接前台跑。
+- **已经有一个在后台跑着，再跑一次不会起第二个**，它会认出来并把地址重新打给你。
+  否则第二个进程抢不到端口、静悄悄失败，而人看到的是「我明明起过了」。
+- 后台那个的 pid 记在 `.together.pid`，输出在 `.together.log`（两个都已经在
+  `.gitignore` 里）。直接关机停的话 pid 文件会留下，下次启动会自己认出来并清掉。
 
 启动后本机自测：
 
 ```bash
-curl http://127.0.0.1:23686/
+curl http://127.0.0.1:31614/
 # 期望:LinWeb 一起看 relay. Connect a websocket to /room/<code>.
 ```
 
@@ -157,13 +163,32 @@ curl http://127.0.0.1:23686/
 
 ### B-1 · Cloudflare Tunnel（家宽 / NAS 首选，免费，不用公网 IP、不用开端口）
 
+中转先按上面跑起来（后台或前台都行），然后**另开一个窗口**：
+
 ```bash
-cloudflared tunnel --url http://localhost:23686
+cloudflared tunnel --url http://localhost:31614
 ```
 
-它会打印一个 `https://<随机词>.trycloudflare.com`，直接拿去用。这种临时隧道**重启就换
-地址**，长期用就按 [Cloudflare 官方文档](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-建一条命名隧道绑自己的域名。
+它会打印一个 `https://<随机词>.trycloudflare.com`，**那条就是要填进播放器的地址**
+（不是上面局域网那条）。
+
+先装 cloudflared：
+
+```bash
+# Debian / Ubuntu
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cf.deb && sudo dpkg -i cf.deb
+# macOS
+brew install cloudflared
+# Windows
+winget install --id Cloudflare.cloudflared
+```
+
+⚠️ 这种临时隧道**一停就没、重开换地址**，适合今晚看个片。长期用就按
+[Cloudflare 官方文档](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+建一条**命名隧道**绑自己的域名，地址就固定了。
+
+（隧道没做进 `npm run together` 里：把一台机器挂上公网是个对外的动作，不该被一个
+「启动脚本」顺手做掉；而且 cloudflared 本来就是一条命令，包一层没省什么。）
 
 Cloudflare Tunnel 免费版转发 WebSocket 没问题，注意两条：空闲超时 100 秒（心跳 25 秒
 一次，够了）、单条消息上限 32 MiB（我们最大的一条是几 KB 的 SDP）。
@@ -175,7 +200,7 @@ Cloudflare Tunnel 免费版转发 WebSocket 没问题，注意两条：空闲超
 
 ```nginx
 location /room/ {
-    proxy_pass http://127.0.0.1:23686;
+    proxy_pass http://127.0.0.1:31614;
     proxy_http_version 1.1;
     proxy_set_header Upgrade    $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -189,7 +214,7 @@ location /room/ {
 
 ```
 你的域名 {
-    reverse_proxy /room/* 127.0.0.1:23686
+    reverse_proxy /room/* 127.0.0.1:31614
 }
 ```
 
@@ -209,7 +234,7 @@ After=network.target
 # 裸服务，不是 together-deploy.mjs：后者只是为了把地址打给人看，
 # systemd 下没人看那个框，重启也由 systemd 自己管
 ExecStart=/usr/bin/node /opt/webplayer/tools/together-server.mjs
-Environment=PORT=23686
+Environment=PORT=31614
 Restart=always
 User=nobody
 
@@ -236,13 +261,13 @@ FROM node:22-alpine
 WORKDIR /app
 COPY src/together ./src/together
 COPY tools/together-server.mjs ./tools/
-EXPOSE 23686
+EXPOSE 31614
 CMD ["node", "tools/together-server.mjs"]
 ```
 
 ```bash
 docker build -f Dockerfile.together -t linweb-together .
-docker run -d --restart unless-stopped -p 23686:23686 linweb-together
+docker run -d --restart unless-stopped -p 31614:31614 linweb-together
 ```
 
 ---
@@ -347,7 +372,7 @@ Netlify Functions 明确不支持 WebSocket；Edge Functions 底层虽然是 Den
 1. 正常从媒体库进到播放页（`play.html`）
 2. 右侧栏往下找到 **「一起看」** 那张卡片
 3. 最上面那个输入框，**把中转地址整条粘进去** —— `https://` 开头的直接粘，不用手动
-   改成 `wss://`，客户端自己会换；只写个 `我的域名:23686` 也认，会跟着当前页面用
+   改成 `wss://`，客户端自己会换；只写个 `我的域名:31614` 也认，会跟着当前页面用
    `ws` 还是 `wss`
 4. 填个昵称（默认随机给一个）
 5. 点 **「开房间」** —— 它会随机生成一个 6 位房间号并立刻连上

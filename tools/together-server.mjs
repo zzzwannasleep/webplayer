@@ -1,9 +1,9 @@
 // 一起看 relay — self-hosted, on bare node:http, with no dependencies.
 //
-//   node tools/together-server.mjs           # listens on 23686
+//   node tools/together-server.mjs           # listens on 31614
 //   PORT=9000 node tools/together-server.mjs
 //
-// then point the player's 一起看 card at ws://your-host:23686 (or wss:// if it
+// then point the player's 一起看 card at ws://your-host:31614 (or wss:// if it
 // is behind a reverse proxy or a Cloudflare Tunnel that terminates TLS -- a
 // browser on an https page cannot open a plain ws://).
 //
@@ -22,7 +22,9 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Relay } from '../src/together/relay.js';
 
-const PORT = Number(process.env.PORT || 23686);
+// 31614, not 23685: that one is the site. Two things fighting over one port
+// fails in the least helpful way -- whichever loses just is not there.
+const PORT = Number(process.env.PORT || 31614);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_FRAME = 1 << 20;      // 1 MiB. An SDP offer is a few KB; nothing here is big.
 const IDLE_MS = 120_000;        // clients ping every 25s, so silence this long is a dead socket.

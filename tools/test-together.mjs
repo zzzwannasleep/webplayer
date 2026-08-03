@@ -124,16 +124,16 @@ console.log('\n=== relay address ===');
   const at = (url, code = 'ABC123') => Object.assign(new Room(), { url, code })._wsUrl();
 
   check('https:// becomes wss://', () => assert.equal(at('https://a.workers.dev'), 'wss://a.workers.dev/room/ABC123'));
-  check('http:// becomes ws://', () => assert.equal(at('http://192.168.1.9:23686'), 'ws://192.168.1.9:23686/room/ABC123'));
+  check('http:// becomes ws://', () => assert.equal(at('http://192.168.1.9:31614'), 'ws://192.168.1.9:31614/room/ABC123'));
   check('wss:// is left alone', () => assert.equal(at('wss://a.example/x'), 'wss://a.example/x/room/ABC123'));
   check('ws:// is left alone', () => assert.equal(at('ws://a.example'), 'ws://a.example/room/ABC123'));
   check('a trailing slash does not double up', () => assert.equal(at('https://a.workers.dev//'), 'wss://a.workers.dev/room/ABC123'));
   check('surrounding whitespace is trimmed', () => assert.equal(at('  https://a.workers.dev  '), 'wss://a.workers.dev/room/ABC123'));
   // A scheme-less host takes the PAGE's scheme. Guessing ws:// on an https page
   // would only produce a mixed-content error that says nothing useful.
-  check('a bare host on an https page gets wss://', () => assert.equal(at('a.example:23686'), 'wss://a.example:23686/room/ABC123'));
+  check('a bare host on an https page gets wss://', () => assert.equal(at('a.example:31614'), 'wss://a.example:31614/room/ABC123'));
   globalThis.location = { protocol: 'http:' };
-  check('a bare host on an http page gets ws://', () => assert.equal(at('192.168.1.9:23686'), 'ws://192.168.1.9:23686/room/ABC123'));
+  check('a bare host on an http page gets ws://', () => assert.equal(at('192.168.1.9:31614'), 'ws://192.168.1.9:31614/room/ABC123'));
   check('a room code is percent-encoded, not injected raw',
     () => assert.equal(at('ws://a.example', 'a/b?c'), 'ws://a.example/room/a%2Fb%3Fc'));
   delete globalThis.location;
@@ -146,7 +146,14 @@ console.log('\n=== relay address ===');
 
 console.log('\n=== launcher ===');
 {
-  const { localAddresses, findTunnelUrl, displayWidth } = await import('./together-deploy.mjs');
+  const { localAddresses, displayWidth, stopHint, saidYes, DEFAULT_PORT } = await import('./together-deploy.mjs');
+
+  // The site is on 23685. Two things fighting over one port fails in the least
+  // helpful way -- whichever loses simply is not there.
+  check('the relay does not default to the site port', () => {
+    assert.equal(DEFAULT_PORT, 31614);
+    assert.notEqual(DEFAULT_PORT, 23685);
+  });
 
   const ifaces = {
     'lo':        [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
@@ -172,22 +179,24 @@ console.log('\n=== launcher ===');
   check('a docker bridge sinks below the real ones', () => assert.equal(picked.at(-1), '172.17.0.1'));
   check('no interfaces at all is not a crash', () => assert.deepEqual(localAddresses({}), []));
 
-  // cloudflared has moved this line around between versions; matching the
-  // hostname anywhere in the output survives that.
-  const cfLog = `2026-08-03T06:00:00Z INF +--------------------------------------+
-2026-08-03T06:00:00Z INF |  https://weird-lamp-echo-42.trycloudflare.com  |
-2026-08-03T06:00:00Z INF +--------------------------------------+`;
-  check('the tunnel address is found inside the banner',
-    () => assert.equal(findTunnelUrl(cfLog), 'https://weird-lamp-echo-42.trycloudflare.com'));
-  check('a bare line works too',
-    () => assert.equal(findTunnelUrl('your url is https://a-b-c.trycloudflare.com now'), 'https://a-b-c.trycloudflare.com'));
-  check('no address in the output is null, not a wrong guess',
-    () => assert.equal(findTunnelUrl('INF Starting tunnel...'), null));
-  check('a lookalike host is not mistaken for it',
-    () => assert.equal(findTunnelUrl('https://trycloudflare.com.evil.test'), null));
-
   check('CJK counts as two columns so the box does not skew',
     () => { assert.equal(displayWidth('一起看'), 6); assert.equal(displayWidth('abc'), 3); });
+
+  // Backgrounding it is only half the job: "how do I stop it" is the same
+  // platform-specific knowledge the prompt exists to spare people.
+  check('the stop command matches the platform', () => {
+    assert.equal(stopHint(4321, 'win32'), 'taskkill /PID 4321 /F');
+    assert.equal(stopHint(4321, 'linux'), 'kill 4321');
+  });
+
+  // Enter must mean no. Backgrounding a process is the answer that is harder
+  // to undo, so it does not get to be the one you fall into by pressing return.
+  for (const yes of ['y', 'Y', 'yes', 'YES', ' y ', '是']) {
+    check(`"${yes}" means yes`, () => assert.equal(saidYes(yes), true));
+  }
+  for (const no of ['', ' ', 'n', 'no', 'N', undefined, null, 'yeah', 'sure', '\n']) {
+    check(`${JSON.stringify(no)} does not mean yes`, () => assert.equal(saidYes(no), false));
+  }
 }
 
 // --- frame codec ------------------------------------------------------------

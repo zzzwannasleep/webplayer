@@ -458,23 +458,27 @@ npx wrangler deploy
 ## 选择 2 · 自己的机器(不用 Cloudflare 账号)
 
 ```bash
-npm run together                      # 起中转,并把该粘贴的地址框出来
-npm run together -- --tunnel          # 顺便开条隧道,给一条公网 https 地址
-PORT=9000 npm run together            # 换端口
+npm run together                      # 问你要不要后台跑,然后把该粘贴的地址框出来
+npm run together -- --stop            # 停掉后台那个
+PORT=9000 npm run together            # 换端口(默认 31614,和站点的 23685 分开)
 ```
 
-零依赖,不用 `npm install`,和静态站是两个独立进程。跑完屏幕上会有一个框,里面那条
-地址直接复制,粘进播放页右侧的「一起看」卡片就行。
+零依赖,不用 `npm install`,和静态站是两个独立进程。它会先问一句「要在后台跑吗?
+[y/N]」,选 y 就 detach 出去、关掉窗口也不停,并把停止命令一起打给你。跑完屏幕上
+那个框里的地址直接复制,粘进播放页右侧的「一起看」卡片就行。
 
-想常驻就照着本文最后 **常驻运行** 那节办(systemd / pm2 / 计划任务都行),命令换成
-`node tools/together-server.mjs`(裸服务,不需要那层打印地址的封装)。
+要让**外网**的人也能进,得给它一个公网 https 入口(Cloudflare 隧道一条命令,
+或者挂在你已有的反代后面)—— 见 [DEPLOY-TOGETHER.md](DEPLOY-TOGETHER.md)。
+
+想开机自启就照着本文最后 **常驻运行** 那节办(systemd / pm2 / 计划任务都行),命令
+换成 `node tools/together-server.mjs`(裸服务,不需要那层打印地址的封装)。
 
 **⚠️ https 的页面只能连 `wss://`。** 这个脚本自己不做 TLS,要挂在你已有的反代或
 Cloudflare Tunnel 后面。nginx 的话,和方式 D 里那段 WebSocket 配置是同一套写法:
 
 ```nginx
 location /room/ {
-    proxy_pass http://127.0.0.1:23686;
+    proxy_pass http://127.0.0.1:31614;
     proxy_http_version 1.1;
     proxy_set_header Upgrade    $http_upgrade;
     proxy_set_header Connection $connection_upgrade;   # 见方式 D 里的 map

@@ -57,3 +57,7 @@ public/_*.html
 # cf.json inside it caches the REAL network fingerprint of whoever ran it --
 # ASN, city, postal code, lat/long, TLS randoms. That must never reach a commit.
 worker/.wrangler/
+
+# 一起看中转后台运行时留下的 pid / 日志(tools/together-deploy.mjs --bg)。
+.together.pid
+.together.log

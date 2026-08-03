@@ -1,28 +1,37 @@
 // 一起看中转,一条命令起来,并把该粘贴的那条地址打在屏幕上。
 //
-//   npm run together                                  # 起服务,打印局域网地址
-//   npm run together -- --tunnel                      # 顺便开一条 Cloudflare 隧道,给公网 https 地址
+//   npm run together                                    # 问你要不要后台跑,然后打印地址
+//   npm run together -- --bg                            # 直接后台
+//   npm run together -- --fg                            # 直接前台(不问)
+//   npm run together -- --stop                          # 停掉后台那个
 //   npm run together -- --url https://together.example  # 你已经有反代/域名了
-//   PORT=9000 npm run together
+//   PORT=9000 npm run together                          # 换端口
 //
-// 为什么隧道要显式加 --tunnel,而不是"检测到 cloudflared 就自动开":开隧道等于
-// 把这台机器上的一个服务挂到公网上。那是一个对外的动作,不该由一个"启动脚本"
-// 替人做主。不加就只在局域网里,谁都不会被意外暴露。
+// 前台跑的问题是关掉终端它就没了,而"怎么让一个命令在后台跑"是个跟这个项目
+// 完全无关的知识点(nohup / & / disown / screen,每个平台还不一样)。所以这里
+// 问一句 y/n,选 y 就自己 detach 出去,并把停止命令一起打出来 —— 不然后台跑起来
+// 之后"怎么停"又是同一个问题。
 //
-// 这个脚本只负责"跑起来 + 告诉你地址"。要让它开机自启、掉了自动拉起,见
-// DEPLOY-TOGETHER.md 里的 systemd / 计划任务 / Docker 三段。
+// 隧道(公网地址)不在这个脚本里:那是一个把机器挂上公网的动作,一句 y/n 带过
+// 不合适,而且 cloudflared 自己就一条命令。写在 DEPLOY-TOGETHER.md 里。
 
 import { spawn } from 'node:child_process';
 import { networkInterfaces } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync, writeFileSync, unlinkSync, openSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 
-// --- 两块要单独测的纯逻辑 ---------------------------------------------------
+/** 网页端是 23685;中转另开一个,免得两个东西抢同一个端口。 */
+export const DEFAULT_PORT = 31614;
+
+// --- 要单独测的纯逻辑 -------------------------------------------------------
 
 /**
  * 这台机器上别人能拨到的 IPv4。
- * 排除回环和 169.254（自动私有地址：DHCP 没拿到时系统自己编的，谁也连不上）。
- * 虚拟网卡排到最后 —— 服务器上第一个非回环网卡经常是 docker0 之类的桥，
+ * 排除回环、169.254(DHCP 失败时系统自己编的)、198.18(RFC 2544 测试网段,
+ * 一些 VPN 客户端拿它造假网卡)—— 三种都是没人能连上的地址。
+ * 虚拟网卡排到最后:服务器上第一个非回环网卡经常是 docker0 之类的桥,
  * 把它打在第一行只会让人白试一次。
  */
 export function localAddresses(ifaces = networkInterfaces()) {
@@ -31,8 +40,6 @@ export function localAddresses(ifaces = networkInterfaces()) {
     for (const a of addrs || []) {
       if (a.family !== 'IPv4' && a.family !== 4) continue;
       if (a.internal) continue;
-      // 169.254 是 DHCP 失败时系统自己编的；198.18/15 是 RFC 2544 的测试网段，
-      // 一些 VPN 客户端拿它造假网卡。两个都不是任何人能拨到的地址。
       if (/^169\.254\./.test(a.address) || /^198\.1[89]\./.test(a.address)) continue;
       const priv = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address);
       const virtual = /^(docker|br-|veth|virbr|vEthernet|VMware|VirtualBox|Hyper-V|WSL|Tailscale|ZeroTier)/i.test(name);
@@ -42,23 +49,24 @@ export function localAddresses(ifaces = networkInterfaces()) {
   return out.sort((x, y) => (x.virtual - y.virtual) || (y.priv - x.priv));
 }
 
-/**
- * cloudflared 把地址混在自己的日志里，格式随版本变过几次（有时带方框、有时带
- * 时间戳前缀），所以是从整块输出里找那个域名，而不是按行号或前缀取。
- */
-export function findTunnelUrl(text) {
-  const m = String(text).match(/https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/i);
-  return m ? m[0] : null;
-}
-
-/** 中文按两列算，不然框会歪。 */
+/** 中文按两列算,不然框会歪。 */
 export function displayWidth(s) {
   let w = 0;
   for (const ch of s) w += ch.codePointAt(0) > 0x2e7f ? 2 : 1;
   return w;
 }
 
-// --- 以下是脚本本体，被 import 时不执行 --------------------------------------
+/** 怎么停掉一个后台进程,各平台说法不同,直接把命令给出来。 */
+export function stopHint(pid, platform = process.platform) {
+  return platform === 'win32' ? `taskkill /PID ${pid} /F` : `kill ${pid}`;
+}
+
+/** 回答里只有明确的 y/yes 才算同意;直接回车 = 不后台。 */
+export function saidYes(answer) {
+  return /^(y|yes|是)$/i.test(String(answer ?? '').trim());
+}
+
+// --- 以下是脚本本体,被 import 时不执行 --------------------------------------
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
@@ -66,9 +74,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 async function main() {
   const HERE = dirname(fileURLToPath(import.meta.url));
-  const PORT = Number(process.env.PORT || 23686);
+  const ROOT = join(HERE, '..');
+  const PID_FILE = join(ROOT, '.together.pid');
+  const LOG_FILE = join(ROOT, '.together.log');
+  const PORT = Number(process.env.PORT || DEFAULT_PORT);
   const args = process.argv.slice(2);
-  const wantTunnel = args.includes('--tunnel');
   const urlAt = args.indexOf('--url');
   const fixedUrl = urlAt >= 0 ? args[urlAt + 1] : null;
 
@@ -77,69 +87,127 @@ async function main() {
     process.exit(2);
   }
 
+  if (args.includes('--stop')) return stop();
+
   const W = 74;
   const box = lines => {
     console.log('\n┌' + '─'.repeat(W) + '┐');
     for (const l of lines) console.log('│' + l + ' '.repeat(Math.max(0, W - displayWidth(l))) + '│');
     console.log('└' + '─'.repeat(W) + '┘');
   };
-  const tail = () => console.log('（Ctrl-C 停止。想让它常驻，见 DEPLOY-TOGETHER.md）\n');
 
-  function report({ tunnelUrl, fixedUrl } = {}) {
-    if (fixedUrl) {
-      box([
-        ' 一起看中转已启动',
-        '',
-        ' 把下面这条粘进播放页右侧「一起看」卡片：',
-        '',
-        `     ${fixedUrl}`,
-        '',
-        ' 这是你自己给的地址，脚本没有验证它通不通。连不上的话先确认反代把',
-        ` /room/ 转到了本机 ${PORT} 端口，并且转发了 Upgrade / Connection 头。`,
-      ]);
-      return tail();
+  /** 后台跑起来之后,PID 文件是唯一能再找到它的东西。 */
+  function stop() {
+    if (!existsSync(PID_FILE)) {
+      console.log('没有在后台跑的中转（找不到 .together.pid）。');
+      return;
     }
-    if (tunnelUrl) {
-      box([
-        ' 一起看中转已启动（公网可达）',
-        '',
-        ' 把下面这条粘进播放页右侧「一起看」卡片：',
-        '',
-        `     ${tunnelUrl}`,
-        '',
-        ' 这是 Cloudflare 的临时隧道，自带 https/wss，任何人都能连。',
-        '',
-        ' ⚠ 脚本一停隧道就没了，下次再开会换一个新地址。要固定地址就按',
-        '   DEPLOY-TOGETHER.md 建一条命名隧道绑自己的域名。',
-      ]);
-      return tail();
+    const pid = Number(readFileSync(PID_FILE, 'utf8').trim());
+    try {
+      process.kill(pid);
+      console.log(`已停止后台中转（pid ${pid}）。`);
+    } catch (e) {
+      // ESRCH = 那个进程早就没了,PID 文件是上次没清干净的残留。
+      console.log(e.code === 'ESRCH'
+        ? `pid ${pid} 已经不在了（上次可能是直接关机停的），清掉记录。`
+        : `停不掉 pid ${pid}：${e.message}`);
     }
+    try { unlinkSync(PID_FILE); } catch {}
+  }
+
+  function addressLines() {
+    if (fixedUrl) return [`     ${fixedUrl.replace(/\/+$/, '')}`];
     const addrs = localAddresses();
-    const lines = [' 一起看中转已启动（仅局域网）', '', ' 把下面这条粘进播放页右侧「一起看」卡片：', ''];
-    if (addrs.length) {
-      for (const a of addrs.slice(0, 4)) {
-        lines.push(`     http://${a.address}:${PORT}` + (a.virtual ? `   ← ${a.name}，虚拟网卡，多半不是这个` : ''));
-      }
+    if (!addrs.length) return [`     http://<这台机器的 IP>:${PORT}`];
+    return addrs.slice(0, 4).map(a =>
+      `     http://${a.address}:${PORT}` + (a.virtual ? `   ← ${a.name}，虚拟网卡，多半不是这个` : ''));
+  }
+
+  function report({ bg, pid }) {
+    const lines = [
+      ` 一起看中转已启动${bg ? '（后台）' : ''}`,
+      '',
+      ' 把下面这条粘进播放页右侧「一起看」卡片：',
+      '',
+      ...addressLines(),
+      '',
+    ];
+    if (fixedUrl) {
+      lines.push(' 这是你自己给的地址，脚本没验证它通不通。连不上先确认反代把 /room/',
+        ` 转到了本机 ${PORT} 端口，并且转发了 Upgrade / Connection 头。`);
     } else {
-      lines.push(`     http://<这台机器的 IP>:${PORT}`);
+      lines.push(' ⚠ 局域网地址，只有和这台机器在同一个网络里的人连得上。',
+        '',
+        ' 要让外面的人也能进：给它一个公网 https 入口（Cloudflare 隧道，或者',
+        ' 挂在你已有的反代后面再 --url https://你的域名）。',
+        ' 两种做法 DEPLOY-TOGETHER.md 里都有现成命令。',
+        '',
+        ' ⚠ 播放器页面如果是 https 打开的，浏览器不允许它连 http/ws 的中转，',
+        '   那种情况必须走上面那步。');
     }
-    lines.push(
-      '',
-      ' ⚠ 局域网地址，只有和这台机器在同一个网络里的人连得上。',
-      '',
-      ' 要让外面的人也能进，二选一：',
-      '   · 加 --tunnel 重跑（Cloudflare 临时隧道，需要装 cloudflared）',
-      '   · 挂在你已有的反代/域名后面，然后 --url https://你的域名',
-      '',
-      ' ⚠ 播放器页面如果是 https 打开的，浏览器不允许它连 http/ws 的中转，',
-      '   那种情况必须走上面两条里的一条。',
-    );
+    if (bg) {
+      lines.push('', ` 后台运行中，pid ${pid}。关掉这个窗口不影响它。`,
+        ` 停止：npm run together -- --stop     （或 ${stopHint(pid)}）`,
+        ` 日志：${LOG_FILE}`);
+    }
     box(lines);
-    tail();
+    if (!bg) console.log('（Ctrl-C 停止。想让它开机自启，见 DEPLOY-TOGETHER.md）\n');
+    else console.log('');
+  }
+
+  /** 起来了没。端口被占的话这里一直是 false,好过先打印地址再发现连不上。 */
+  async function waitReady() {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      try { if ((await fetch(`http://127.0.0.1:${PORT}/`).then(r => r.text())).includes('一起看')) return true; } catch {}
+    }
+    return false;
+  }
+  const portBusyNote = () =>
+    console.error(`中转没能在 ${PORT} 端口上起来。最常见的原因是这个端口被占了 ——`
+      + `\n换一个再跑：PORT=9000 npm run together`);
+
+  // 已经有一个在后台跑着就别再起一个:两个进程抢同一个端口,后起的那个会
+  // 静悄悄失败,而人看到的是"我明明起过了"。
+  if (existsSync(PID_FILE)) {
+    const old = Number(readFileSync(PID_FILE, 'utf8').trim());
+    let alive = false;
+    try { process.kill(old, 0); alive = true; } catch {}
+    if (alive) {
+      console.log(`已经有一个中转在后台跑着（pid ${old}）。`);
+      if (await waitReady()) return report({ bg: true, pid: old });
+      console.log('但它没有响应，先停掉再重开：npm run together -- --stop');
+      return;
+    }
+    try { unlinkSync(PID_FILE); } catch {}   // 上次没清干净的残留
+  }
+
+  // 后台还是前台。非交互环境(CI、管道、systemd)不问,默认前台 —— 在那里
+  // 弹一个等输入的问题就是挂死。
+  let bg = args.includes('--bg');
+  if (!bg && !args.includes('--fg') && process.stdin.isTTY && process.stdout.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ans = await rl.question('要在后台跑吗？选 y 之后关掉这个窗口它也继续跑。[y/N] ');
+    rl.close();
+    bg = saidYes(ans);
+  }
+
+  if (bg) {
+    // detached + unref:父进程退出后它不跟着走。stdio 全接到日志文件,
+    // 不然父进程一走,写 stdout 就是往一个没人读的管子里写。
+    const out = openSync(LOG_FILE, 'a');
+    const child = spawn(process.execPath, [join(HERE, 'together-server.mjs')],
+      { detached: true, stdio: ['ignore', out, out], windowsHide: true,
+        env: { ...process.env, PORT: String(PORT) } });
+    child.unref();
+    if (!await waitReady()) { portBusyNote(); try { process.kill(child.pid); } catch {} process.exit(1); }
+    writeFileSync(PID_FILE, String(child.pid));
+    report({ bg: true, pid: child.pid });
+    process.exit(0);
   }
 
   const kids = [];
-  let stopping = false;
+  let stopping = false, ready = false;
   const bye = () => { stopping = true; for (const k of kids) { try { k.kill(); } catch {} } };
   process.on('SIGINT', () => { console.log('\n停止。'); bye(); process.exit(0); });
   process.on('SIGTERM', () => { bye(); process.exit(0); });
@@ -148,55 +216,17 @@ async function main() {
   const relay = spawn(process.execPath, [join(HERE, 'together-server.mjs')],
     { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, PORT: String(PORT) } });
   kids.push(relay);
-  let ready = false;
   relay.on('exit', (code, signal) => {
-    // Ctrl-C 把信号发给整个进程组，子进程往往比我们先死 —— 那不是崩溃。
-    // 光看 `stopping` 不够：它是在我们自己的信号处理里才置上的，会晚一拍。
+    // Ctrl-C 把信号发给整个进程组,子进程往往比我们先死 —— 那不是崩溃。
+    // 光看 stopping 不够:它在我们自己的信号处理里才置上,会晚一拍。
     if (stopping || signal || code === 130 || code === 143) return;
-    // 端口被占只可能发生在还没听上的时候。已经跑起来又退出的，说别的原因
-    // 只会把人往错的方向带。
-    console.error(`\n中转进程退出了（code ${code}）。`
-      + (ready ? '' : `\n最常见的原因是 ${PORT} 端口被占了 —— 换一个再跑：PORT=9000 npm run together`));
+    console.error(`\n中转进程退出了（code ${code}）。`);
+    if (!ready) portBusyNote();
     bye();
     process.exit(code ?? 1);
   });
 
-  // 等它真的听上了再打印地址。反过来的话，端口被占时也会先打印出一条看着
-  // 很正常的地址，人复制走了才发现根本连不上。
-  for (let i = 0; i < 40 && !ready; i++) {
-    await new Promise(r => setTimeout(r, 150));
-    try { ready = (await fetch(`http://127.0.0.1:${PORT}/`).then(r => r.text())).includes('一起看'); } catch {}
-  }
-  if (!ready) { console.error(`中转没能在 ${PORT} 端口上起来。`); bye(); process.exit(1); }
-
-  if (fixedUrl) return report({ fixedUrl: fixedUrl.replace(/\/+$/, '') });
-  if (!wantTunnel) return report();
-
-  console.log('正在开 Cloudflare 隧道…');
-  const cf = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-  kids.push(cf);
-  let buf = '', done = false;
-  const finish = fn => { if (!done) { done = true; fn(); } };
-  const onData = d => { buf += d; const url = findTunnelUrl(buf); if (url) finish(() => report({ tunnelUrl: url })); };
-  cf.stdout.on('data', onData);
-  cf.stderr.on('data', onData);      // cloudflared 把地址打在 stderr 上
-  cf.on('error', e => finish(() => noCloudflared(e)));
-  cf.on('exit', c => finish(() => { console.error(`cloudflared 退出了（code ${c}）。它最后说的是：\n${buf.slice(-800)}`); report(); }));
-  setTimeout(() => finish(() => {
-    console.error('等了 30 秒没等到隧道地址。cloudflared 的输出：\n' + buf.slice(-800));
-    report();
-  }), 30_000).unref?.();
-
-  function noCloudflared(e) {
-    console.error([
-      '',
-      `没有找到 cloudflared（${e?.code || e?.message || '未知原因'}）—— 装一下再加 --tunnel 重跑：`,
-      '  Debian/Ubuntu  curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cf.deb && sudo dpkg -i cf.deb',
-      '  macOS          brew install cloudflared',
-      '  Windows        winget install --id Cloudflare.cloudflared',
-      '',
-      '中转本身已经起来了，先按局域网地址用：',
-    ].join('\n'));
-    report();
-  }
+  ready = await waitReady();
+  if (!ready) { portBusyNote(); bye(); process.exit(1); }
+  report({ bg: false });
 }
