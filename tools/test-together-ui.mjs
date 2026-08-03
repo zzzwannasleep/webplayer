@@ -276,6 +276,62 @@ check('B kept the room in its address, so the navigation did not drop it',
 check('B rejoined the room by itself after navigating',
   await until(() => B.evalJS(`tg.room.connected`), 8000));
 
+// What was said survives the navigation. B was sent to a new URL a moment ago,
+// which reloads the page -- and before sessionStorage that wiped the chat every
+// time the room changed episode, which is exactly when people are talking.
+check('B still has what was said before it was sent to the new source',
+  await until(() => B.evalJS(`tg.chat.some(c => c.text === '喂喂')`), 6000),
+  `B has ${JSON.stringify(await B.evalJS(`tg.chat.map(c => c.text)`).catch(() => '?'))}`);
+
+// The fullscreen mini bar. It has to be INSIDE the stage: the stage is what
+// goes fullscreen, so anything left in the sidebar is off screen there.
+check('the mini bar lives inside the stage, not the sidebar',
+  await A.evalJS(`!!document.querySelector('#stage > .tgm')`));
+check('it is switched on while in a room', await A.evalJS(`document.querySelector('.tgm').classList.contains('on')`));
+// The last few lines, not all of them -- it is a strip over a picture, so it
+// shows what was just said and lets the sidebar keep the history.
+await B.evalJS(`tg.room.sendChat('全屏也看得见吧', 60); 1`);
+check('it carries what was just said',
+  await until(() => A.evalJS(`[...document.querySelectorAll('.tgm-log p')].some(p => p.textContent.includes('全屏也看得见吧'))`)));
+check('it does not try to be the whole history',
+  await A.evalJS(`document.querySelectorAll('.tgm-log p').length <= 4`));
+check('it names who the room is waiting for', await A.evalJS(`(() => {
+  tg.sync.waiters = [...tg.room.members.map(m => m.id)]; tg.paint();
+  const on = [...document.querySelectorAll('.tgm-who .buf')].some(s => s.textContent.includes('缓冲'));
+  tg.sync.waiters = []; tg.paint();
+  return on;
+})()`));
+// Typing a message with a space in it must not also pause the film.
+check('keys typed into the mini bar do not reach the player', await A.evalJS(`(() => {
+  let leaked = false;
+  const spy = () => { leaked = true; };
+  document.addEventListener('keydown', spy);
+  const ev = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  document.querySelector('.tgm-say').dispatchEvent(ev);
+  document.removeEventListener('keydown', spy);
+  return !leaked;
+})()`));
+
+// A room with a password turns away whoever does not have it, and says so
+// rather than dropping the connection and letting the page guess.
+await A.evalJS(`tg.leave(); 1`);
+await B.evalJS(`tg.leave(); 1`);
+await sleep(300);
+await A.evalJS(`tg.join('LOCKED', ${JSON.stringify(relayUrl)}, 'kaimen'); 1`);
+check('a passworded room opens', await until(() => A.evalJS(`tg.room.connected`)));
+await B.evalJS(`tg.join('LOCKED', ${JSON.stringify(relayUrl)}, 'wrong'); 1`);
+check('the wrong password does not get in', await until(() => B.evalJS(`tg.room.status === 'closed'`)));
+check('and the panel says so in words', await until(() =>
+  B.evalJS(`tg.chat.some(c => c.sys && c.text.includes('密码'))`)));
+check('and puts the password field in front of you',
+  await B.evalJS(`!document.querySelector('.tgp-row [placeholder="房间密码"]').closest('.tgp-row').hidden`));
+check('a wrong password does not retry forever',
+  await B.evalJS(`tg.room._closing === true`));
+await B.evalJS(`tg.join('LOCKED', ${JSON.stringify(relayUrl)}, 'kaimen'); 1`);
+check('the right password gets in', await until(() => B.evalJS(`tg.room.connected`)));
+check('and both are in the same room', await until(() => B.evalJS(`tg.room.members.length === 2`)));
+check('the invite link carries the password', await B.evalJS(`tg._inviteHash().includes('pass=kaimen')`));
+
 // Leaving.
 await A.evalJS(`tg.leave(); 1`);
 check('B sees the room shrink', await until(() => B.evalJS(`tg.room.members.length === 1`)));

@@ -49,6 +49,12 @@ export function panelStyles() {
   .tgp input[type=text] {
     width:100%; background:var(--bg); border:1px solid var(--line); border-radius:6px;
     padding:7px 9px; font-size:12.5px; min-width:0;
+    /* Stated rather than inherited. A control with no colour of its own falls
+       back to the UA's fieldtext keyword, which is BLACK unless the page
+       happens to have declared color-scheme: dark -- and a card that becomes
+       unreadable because of something the host page did or did not say is a
+       card that cannot be dropped into another page. */
+    color:var(--fg);
   }
   .tgp input[type=text]:focus { outline:none; border-color:var(--acc-dim); }
   .tgp input::placeholder { color:var(--faint); }
@@ -111,6 +117,34 @@ export function panelStyles() {
                display:flex; gap:8px; align-items:center; background:rgba(76,154,255,.07); }
   .tgp-offert { font-size:12.5px; line-height:1.45; min-width:0; overflow-wrap:anywhere; }
   .tgp-offer .btn { margin-left:auto; }
+
+  /* ---- the fullscreen mini bar ----------------------------------------
+     Fullscreen takes the stage, not the page, so the sidebar card is simply
+     not on screen -- and "who is buffering" and "what did they just say" are
+     exactly the things you want while the picture is filling the wall. This
+     lives inside the stage so it comes along, and it only exists there. */
+  .tgm {
+    position:absolute; left:0; right:0; bottom:0; z-index:5; display:none;
+    padding:14px 16px 74px; pointer-events:none;
+    background:linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC",sans-serif;
+    color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.9);
+  }
+  #stage:fullscreen .tgm.on { display:block; }
+  #stage.idle .tgm { opacity:0; transition:opacity .2s; }   /* follows the controls */
+  .tgm-log { display:flex; flex-direction:column; gap:3px; max-width:min(58ch,60%); }
+  .tgm-log p { margin:0; overflow-wrap:anywhere; }
+  .tgm-log .by { color:#8ec5ff; margin-right:5px; }
+  .tgm-log .sys { opacity:.72; font-style:italic; }
+  .tgm-who { margin-top:7px; font-size:12px; opacity:.8; display:flex; gap:10px; flex-wrap:wrap; }
+  .tgm-who .buf { color:var(--dv,#f5c451); opacity:1; }
+  .tgm-say {
+    pointer-events:auto; margin-top:9px; width:min(42ch,60%); display:block;
+    background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22); border-radius:6px;
+    color:#fff; padding:6px 9px; font:inherit; font-size:12.5px;
+  }
+  .tgm-say:focus { outline:none; border-color:#8ec5ff; background:rgba(0,0,0,.75); }
+  .tgm-say::placeholder { color:rgba(255,255,255,.5); }
   `;
 }
 
@@ -138,6 +172,7 @@ export class TogetherPanel {
     this.chat = [];          // { by, text, pos, sys }
     this.offer = null;       // a source the room is on that this page is not
     this.edit = null;        // which folded-away setting is open: 'relay' | 'name'
+    this.wantPass = false;   // is the password field on screen at all
 
     this.room = new Room({ log, onEvent: m => this._onEvent(m) });
     this.sync = new PlaybackSync(video, this.room, { log, onChange: () => this.paint() });
@@ -158,7 +193,7 @@ export class TogetherPanel {
   static inviteFromHash() {
     const h = new URLSearchParams(location.hash.replace(/^#/, ''));
     const code = h.get('together');
-    return code ? { code, relay: h.get('relay') || '' } : null;
+    return code ? { code, relay: h.get('relay') || '', pass: h.get('pass') || '' } : null;
   }
 
   _ice() {
@@ -203,6 +238,22 @@ export class TogetherPanel {
     this.codeIn.addEventListener('keydown', e => { if (e.key === 'Enter') this.join(); });
     this.codeIn.addEventListener('input', () => this.paint());
 
+    // A password costs nothing until somebody wants one, so it costs no space
+    // either: the field is not there until you ask for it, or until a relay
+    // turns you away for want of it. A room code is nine hundred million
+    // combinations and nobody is brute-forcing one over a WebSocket -- what
+    // this is actually for is reusing a code you can remember ("我们家") next
+    // week without whoever heard it last week wandering back in.
+    this.passIn = el('input', { type: 'text', placeholder: '房间密码', value: '' });
+    this.passIn.addEventListener('keydown', e => { if (e.key === 'Enter') this.join(); });
+    this.passBtn = el('button', { type: 'button' });
+    this.passBtn.addEventListener('click', () => {
+      this.wantPass = !this.wantPass;
+      if (!this.wantPass) this.passIn.value = '';
+      this.paint();
+      if (this.wantPass) this.passIn.focus();
+    });
+
     // ONE action. A blank code means a new room, so there is nothing to choose
     // between -- the old 加入 / 开房间 pair asked the viewer to make a decision
     // the field they had just filled in (or not) had already made.
@@ -218,7 +269,8 @@ export class TogetherPanel {
     this.whoName = el('b');
     this.metaName = el('span', {}, '昵称 ', this.whoName, ' ', this.nameBtn);
     this.metaRelay = el('span', {}, '中转 ', this.relayName, ' ', this.relayBtn);
-    this.meta = el('div', { className: 'tgp-meta' }, this.metaName, this.metaRelay);
+    this.meta = el('div', { className: 'tgp-meta' }, this.metaName, this.metaRelay,
+      el('span', {}, this.passBtn));
 
     this.hint = el('p', { className: 'tgp-note',
       textContent: '和朋友看同一集，进度自动对齐，还能打字和开麦聊天。先要一个中转地址——房主部署一次，之后大家共用。' });
@@ -232,6 +284,7 @@ export class TogetherPanel {
       this.relayRow = el('div', { className: 'tgp-row' }, this.relay),
       this.whoRow = el('div', { className: 'tgp-row' }, this.who),
       el('div', { className: 'tgp-row' }, this.codeIn, this.goBtn),
+      this.passRow = el('div', { className: 'tgp-row', hidden: true }, this.passIn),
       this.meta,
       this.setup);
 
@@ -286,6 +339,23 @@ export class TogetherPanel {
     this.el = el('div', { className: 'card tgp' },
       el('h2', {}, el('span', { textContent: '一起看' }), this.st),
       this.lobby, this.room_);
+
+    // ---- the fullscreen mini bar ------------------------------------------
+    // A separate element rather than a moved one: dragging the card in and out
+    // of the stage on every fullscreen change would take its focus, its scroll
+    // position and any half-typed message with it.
+    this.miLog = el('div', { className: 'tgm-log' });
+    this.miWho = el('div', { className: 'tgm-who' });
+    this.miSay = el('input', { className: 'tgm-say', type: 'text', placeholder: '说点什么…（回车发送）' });
+    this.miSay.addEventListener('keydown', e => {
+      // The player listens for space, f, arrows. A message with a space in it
+      // must not also be a pause, so keys stop here while this has focus.
+      e.stopPropagation();
+      if (e.key !== 'Enter' || !this.miSay.value.trim()) return;
+      this.room.sendChat(this.miSay.value.trim(), this.video.currentTime);
+      this.miSay.value = '';
+    });
+    this.mini = el('div', { className: 'tgm' }, this.miLog, this.miWho, this.miSay);
   }
 
   // --- room ----------------------------------------------------------------
@@ -293,13 +363,39 @@ export class TogetherPanel {
   _save(patch) { this.s = { ...this.s, ...patch }; save(this.s); }
 
   /** A blank room code is not an error — it is how you open a new room. */
-  join(code = this.codeIn.value.trim().toUpperCase() || newRoomCode(), relay = this.relay.value.trim()) {
+  join(code = this.codeIn.value.trim().toUpperCase() || newRoomCode(),
+       relay = this.relay.value.trim(),
+       pass = this.passIn.value) {
     if (!relay) { this.edit = 'relay'; this.paint(); this.relay.focus(); this._sys('先填中转地址'); return; }
     this.codeIn.value = code; this.relay.value = relay;
+    if (pass) { this.passIn.value = pass; this.wantPass = true; }
     this._save({ relay, name: this.who.value.trim() });
-    this.chat = [];
+    // Whatever was said in this room before the page reloaded. Following a
+    // source navigates, so without this the conversation was wiped every time
+    // the room changed episode -- which is exactly when people are talking.
+    this.chat = this._loadChat(code);
     this._sys(`正在加入 ${code}…`);
-    this.room.connect(relay, code, this.who.value.trim() || '匿名');
+    this.room.connect(relay, code, this.who.value.trim() || '匿名', pass);
+  }
+
+  // --- chat that survives the page -----------------------------------------
+  // sessionStorage, not localStorage: a conversation belongs to this tab and
+  // this sitting. Reopening the browser tomorrow and finding last night's chat
+  // waiting is not a feature, and the room it belonged to is long gone.
+
+  _chatKey(code) { return `${KEY}:chat:${code}`; }
+
+  _loadChat(code) {
+    try { return JSON.parse(sessionStorage.getItem(this._chatKey(code))) || []; }
+    catch { return []; }
+  }
+
+  _saveChat() {
+    if (!this.room.code) return;
+    // System lines are about this page's own connection ("正在加入…", "连接
+    // 断开"), so they are noise once it has reloaded. What people said is not.
+    try { sessionStorage.setItem(this._chatKey(this.room.code), JSON.stringify(this.chat.filter(c => !c.sys))); }
+    catch {}
   }
 
   leave() {
@@ -309,9 +405,19 @@ export class TogetherPanel {
     this._sys('已退出房间');
   }
 
-  /** `#together=CODE&relay=…` for the room this member is in. */
+  /**
+   * `#together=CODE&relay=…` for the room this member is in.
+   *
+   * The password rides along. That is not a hole: an invite link IS the
+   * credential, and a fragment is never sent to whatever is hosting these
+   * files. The password exists so that a code you can say out loud can be
+   * reused -- if you had to read it out separately as well, you would be back
+   * to reading out something nobody can remember.
+   */
   _inviteHash() {
-    return '#' + new URLSearchParams({ together: this.room.code, relay: this.room.url });
+    const q = new URLSearchParams({ together: this.room.code, relay: this.room.url });
+    if (this.room.pass) q.set('pass', this.room.pass);
+    return '#' + q;
   }
 
   async copyInvite() {
@@ -387,7 +493,10 @@ export class TogetherPanel {
   }
 
   _sys(text) { this.chat.push({ sys: true, text }); this._trim(); this.paint(); }
-  _trim() { if (this.chat.length > 200) this.chat.splice(0, this.chat.length - 200); }
+  _trim() {
+    if (this.chat.length > 200) this.chat.splice(0, this.chat.length - 200);
+    this._saveChat();
+  }
 
   _onEvent(m) {
     this.sync.onMessage(m);
@@ -400,6 +509,19 @@ export class TogetherPanel {
         }
         else if (m.state === 'retrying') this._sys(m.detail || '连接断开，正在重连');
         else if (m.state === 'closed' && m.detail) this._sys(m.detail);
+        break;
+      // Turned away. For a password that is not an error to report and walk
+      // away from -- it is a field to put in front of the person, already
+      // holding the code they typed, so the next thing they do is type the
+      // password rather than work out where to.
+      case 'denied':
+        if (m.why === 'pass') {
+          this.wantPass = true;
+          this._sys(this.passIn.value ? '密码不对，再试一次' : '这个房间要密码');
+          this.passIn.value = '';
+          this.paint();
+          this.passIn.focus();
+        }
         break;
       case 'media': this._onMedia(m); break;
       case 'welcome': if (m.media) this._onMedia(m.media); break;
@@ -454,6 +576,8 @@ export class TogetherPanel {
       this.whoName.textContent = this.who.value.trim() || '匿名';
       this.relayBtn.textContent = this.edit === 'relay' ? '收起' : '改';
       this.nameBtn.textContent = this.edit === 'name' ? '收起' : '改';
+      this.passRow.hidden = !this.wantPass;
+      this.passBtn.textContent = this.wantPass ? '不要密码' : '加个密码';
       // The button says what pressing it will actually do.
       this.goBtn.textContent = this.codeIn.value.trim() ? '加入房间' : '开个房间';
       this.goBtn.disabled = !hasRelay;
@@ -495,6 +619,21 @@ export class TogetherPanel {
           : null);
     }));
 
+    // The mini bar carries only what is worth reading over a picture: the last
+    // few lines, and who the room is waiting for. No member list, no settings,
+    // no room code -- you are past all of that by the time you are fullscreen.
+    this.mini.classList.toggle('on', joined);
+    if (joined) {
+      this.miLog.replaceChildren(...this.chat.slice(-4).map(c => c.sys
+        ? el('p', { className: 'sys', textContent: c.text })
+        : el('p', {}, el('span', { className: 'by', textContent: c.by }), document.createTextNode(c.text))));
+      const held = r.members.filter(m => this.sync.waiters.includes(m.id));
+      this.miWho.replaceChildren(
+        el('span', { textContent: `${r.members.length} 人` }),
+        ...held.map(m => el('span', { className: 'buf', textContent: `等 ${m.name || '有人'} 缓冲…` })),
+        ...(this.offer ? [el('span', { className: 'buf', textContent: `房间换成了《${this.offer.want?.title || '别的'}》` })] : []));
+    }
+
     const wasBottom = this.logBox.scrollHeight - this.logBox.scrollTop - this.logBox.clientHeight < 24;
     this.logBox.replaceChildren(...this.chat.map(c => c.sys
       ? el('p', { className: 'sys', textContent: c.text })
@@ -507,6 +646,7 @@ export class TogetherPanel {
 
   destroy() {
     this.video.removeEventListener('loadedmetadata', this._onMeta);
+    this.mini.remove();
     this.voice.destroy(); this.sync.stop(); this.room.disconnect();
   }
 }

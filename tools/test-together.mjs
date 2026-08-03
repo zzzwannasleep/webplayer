@@ -112,6 +112,106 @@ const conn = name => ({ name, box: [], send(m) { this.box.push(m); }, last(t) { 
   });
 }
 
+// --- passwords --------------------------------------------------------------
+// Not because a six-character code is guessable -- it is one in nine hundred
+// million over a WebSocket -- but so that a code you can SAY ("我们家") can be
+// reused next week without whoever heard it last week wandering back in.
+
+console.log('\n=== password ===');
+{
+  const r = new Relay();
+  const shut = c => { c.closed = true; };
+  const pconn = name => Object.assign(conn(name), { close() { this.closed = true; } });
+
+  const a = pconn('a');
+  r.message(a, { t: 'hello', name: '甲', pass: 'kaimen' });
+  check('the first one in sets the password', () => assert.equal(r.pass, 'kaimen'));
+
+  const wrong = pconn('wrong');
+  r.message(wrong, { t: 'hello', name: '贼', pass: 'nope' });
+  check('a wrong password is refused', () => assert.equal(r.size, 1));
+  check('and is told why, not just hung up on', () => assert.equal(wrong.last('denied').why, 'pass'));
+  check('and the socket is closed', () => assert.equal(wrong.closed, true));
+  check('a refused socket learns nothing about the room', () => assert.equal(wrong.last('welcome'), undefined));
+
+  const none = pconn('none');
+  r.message(none, { t: 'hello', name: '路人' });
+  check('no password at all is also refused', () => assert.equal(none.last('denied').why, 'pass'));
+
+  const b = pconn('b');
+  r.message(b, { t: 'hello', name: '乙', pass: 'kaimen' });
+  check('the right password gets in', () => assert.equal(b.last('welcome').members.length, 2));
+
+  // An empty room is not a room: the code becomes free again, with a new
+  // password, which is the whole point of being able to reuse one.
+  r.leave(a); r.leave(b);
+  check('an empty room forgets its password', () => assert.equal(r.pass, null));
+  check('an empty room forgets what it was watching', () => assert.equal(r.media, null));
+  const c = pconn('c');
+  r.message(c, { t: 'hello', name: '丙', pass: 'biede' });
+  check('so the same code can be reopened with a different one', () => assert.equal(r.pass, 'biede'));
+
+  const open = new Relay();
+  const d = pconn('d');
+  open.message(d, { t: 'hello', name: '丁' });
+  const e = pconn('e');
+  open.message(e, { t: 'hello', name: '戊' });
+  check('a room opened without one stays open to everybody', () => assert.equal(open.size, 2));
+  const f = pconn('f');
+  open.message(f, { t: 'hello', name: '己', pass: 'x' });
+  check('and offering a password to an open room does not get you in',
+    () => assert.equal(f.last('denied').why, 'pass'));
+}
+
+// --- members that stopped existing ------------------------------------------
+// A socket timeout cannot find these: it is reset by WRITES as well as reads
+// (measured -- a socket written to every 120ms never fires a 400ms timeout),
+// and the host broadcasts an anchor to every member every 5 seconds. So a
+// member whose laptop lid closed is written to forever, stays in the list, and
+// can be handed the host seat -- after which nobody re-anchors the room at all.
+
+console.log('\n=== liveness ===');
+{
+  let clock = 1_000_000;
+  const r = new Relay({ now: () => clock });
+  const pconn = name => Object.assign(conn(name), { close() { this.closed = true; } });
+  const a = pconn('a'), b = pconn('b');
+  r.message(a, { t: 'hello', name: '甲' });
+  r.message(b, { t: 'hello', name: '乙' });
+  const idA = a.last('welcome').you, idB = b.last('welcome').you;
+
+  clock += 30_000;
+  r.message(b, { t: 'ping', c: 1 });
+  check('a sweep spares everyone recently heard from', () => {
+    assert.equal(r.sweep(), false);
+    assert.equal(r.size, 2);
+  });
+
+  // A is now the one that went quiet. It is also the host, which is the case
+  // that actually breaks a room rather than just untidying the member list.
+  check('the quiet one is the host, so this is the case that matters', () => assert.equal(r.host, idA));
+  clock += 45_000;
+  r.message(b, { t: 'ping', c: 2 });
+  check('a member silent past the deadline is dropped', () => {
+    assert.equal(r.sweep(), true);
+    assert.equal(r.size, 1);
+  });
+  check('the survivor is told', () => assert.equal(b.last('leave').member.id, idA));
+  check('the host seat moves to somebody who is actually there', () => assert.equal(r.host, idB));
+  check('the dropped socket is closed rather than left dangling', () => assert.equal(a.closed, true));
+
+  // A ghost that was buffering must not hold the room from beyond the grave.
+  const c = pconn('c');
+  r.message(c, { t: 'hello', name: '丙' });
+  r.message(c, { t: 'wait', waiting: true });
+  check('the room is held', () => assert.equal(r.waiters.length, 1));
+  clock += 90_000;
+  r.message(b, { t: 'ping', c: 3 });
+  r.sweep();
+  check('sweeping a buffering ghost releases the hold', () => assert.deepEqual(r.waiters, []));
+  check('and says so, or everyone stays paused', () => assert.deepEqual(b.last('wait').waiters, []));
+}
+
 // --- what the room is watching ----------------------------------------------
 // The relay remembers it exactly like a state frame, because a member who joins
 // late needs to be told WHICH film the playhead refers to before the playhead

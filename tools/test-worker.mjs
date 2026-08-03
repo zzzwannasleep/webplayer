@@ -33,17 +33,20 @@ console.log('=== worker (workerd) ===');
 check('a plain GET explains what the address is', () => {});
 
 /** One member: a WebSocket plus everything it has been told. */
-async function member(code, name) {
+async function member(code, name, pass) {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/room/${code}`);
   const got = [];
+  let shut = null;
   ws.addEventListener('message', e => got.push(JSON.parse(e.data)));
+  ws.addEventListener('close', e => { shut = e.code ?? 1005; });
   await new Promise((ok, no) => { ws.addEventListener('open', ok); ws.addEventListener('error', no); });
   const api = {
     ws, got,
+    get closed() { return shut !== null; },
     send: m => ws.send(JSON.stringify(m)),
     last: t => [...got].reverse().find(x => x.t === t),
   };
-  api.send({ t: 'hello', name });
+  api.send({ t: 'hello', name, pass });
   return api;
 }
 const settle = () => sleep(250);
@@ -109,6 +112,29 @@ check('the new host is one of the members still here',
   () => assert.ok(b.last('leave').members.some(m => m.id === b.last('leave').host)));
 
 for (const m of [b, c, d]) m.ws.close();
+await settle();
+
+// A room with a password, through the real object. This is the path that
+// changed most: the Worker used to special-case a rejected hello itself
+// (ws.close(1013)), and now the relay turns the socket away through
+// conn.close() -- so whether a Hibernation-accepted WebSocket actually closes
+// when the shared logic asks it to is a workerd question, not a logic one.
+const lockA = await member('WDPASS', '甲', 'kaimen');
+await settle();
+check('a passworded room opens through the object', () => assert.ok(lockA.last('welcome')?.you));
+
+const lockBad = await member('WDPASS', '贼', 'nope');
+await settle();
+check('a wrong password is told why', () => assert.equal(lockBad.last('denied')?.why, 'pass'));
+check('and gets no welcome', () => assert.equal(lockBad.last('welcome'), undefined));
+check('and workerd really closes the socket', () => assert.equal(lockBad.closed, true));
+check('and the room did not grow', () => assert.equal(lockA.last('join'), undefined));
+
+const lockB = await member('WDPASS', '乙', 'kaimen');
+await settle();
+check('the right password gets in through the object', () => assert.equal(lockB.last('welcome').members.length, 2));
+
+for (const m of [lockA, lockB]) m.ws.close();
 await settle();
 
 console.log(bad ? `\n${bad} WORKER CHECK(S) FAILED` : `\nALL WORKER CHECKS PASSED (${n})`);

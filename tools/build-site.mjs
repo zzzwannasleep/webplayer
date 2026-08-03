@@ -9,13 +9,50 @@
 // is what was tested.
 //
 // Run AFTER tools/build-vendor.mjs (which produces public/vendor/).
-import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const ROOT = process.argv[2] || '.';
 const OUT = `${ROOT}/dist`;
 
 if (!existsSync(`${ROOT}/public/vendor/jassub.js`)) {
   console.error('public/vendor/ is missing — run `node tools/build-vendor.mjs` first.');
+  process.exit(1);
+}
+
+/**
+ * Parse everything before shipping it.
+ *
+ * There is no bundler here, which is the point -- what ships is what was
+ * tested. The price is that nothing ever reads the source: a syntax error in
+ * any module used to be copied into dist/ and the build still printed
+ * "built". The browser then fails at module evaluation, which kills every line
+ * after it and still renders a page that looks nearly fine.
+ *
+ * `node --check` detects module syntax on its own, costs a few milliseconds a
+ * file, and needs no dependency. (Two real ones this caught: a backtick inside
+ * a CSS comment inside a styles template literal, which ends the string and
+ * turns the rest of the rule into code. Twice.)
+ */
+function checkSyntax(dir) {
+  const bad = [];
+  const walk = d => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = `${d}/${e.name}`;
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) {
+        const r = spawnSync(process.execPath, ['--check', p], { encoding: 'utf8' });
+        if (r.status !== 0) bad.push(`${p}\n${(r.stderr || '').trim().split('\n').slice(0, 4).join('\n')}`);
+      }
+    }
+  };
+  walk(dir);
+  return bad;
+}
+
+const broken = checkSyntax(`${ROOT}/src`);
+if (broken.length) {
+  console.error(`refusing to build — ${broken.length} module(s) do not parse:\n\n${broken.join('\n\n')}`);
   process.exit(1);
 }
 

@@ -680,6 +680,10 @@ const togetherMedia = {
 
 tg = new TogetherPanel(video, { log: player.log, button: $('#tgBtn'), title: WANT.title || '', media: togetherMedia });
 $('#logCard').before(tg.el);
+// The mini bar goes INSIDE the stage, because the stage is what goes
+// fullscreen (see src/ui/touch.js) -- anything left in the sidebar is simply
+// not on screen there, which is where a room needs its chat the most.
+stage.append(tg.mini);
 {
   const invite = TogetherPanel.inviteFromHash();
   // Auto-join only when the link carried both halves. Landing in a room with
@@ -687,7 +691,7 @@ $('#logCard').before(tg.el);
   if (invite?.relay) {
     tg.relay.value = invite.relay;
     tg.codeIn.value = invite.code;
-    tg.join(invite.code, invite.relay);
+    tg.join(invite.code, invite.relay, invite.pass);
   } else if (invite) {
     tg.codeIn.value = invite.code;
   }

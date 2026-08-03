@@ -26,16 +26,31 @@ const newId = () => {
 const MAX_NAME = 24;
 const MAX_CHAT = 500;
 const MAX_MEMBERS = 32;
+const MAX_PASS = 64;
 const MAX_HREF = 4096;    // a signed stream URL with a token is long; a novel is not
+
+/**
+ * How long a member may be silent before the room stops counting it.
+ *
+ * Clients ping every 25s (PING_SLOW_MS in room.js), so this is two missed
+ * pings plus slack. It has to be an application-level rule rather than a socket
+ * timeout: a socket timeout is reset by WRITES as well as reads (measured), and
+ * the host broadcasts an anchor to every member every 5 seconds — so a member
+ * whose network died is written to forever and never goes idle. It stayed in
+ * the member list, and could be handed the host seat, after which nobody
+ * re-anchored the room at all.
+ */
+export const IDLE_MS = 70_000;
 
 export class Relay {
   constructor({ now = () => Date.now(), makeId = newId } = {}) {
     this.now = now;
     this.makeId = makeId;
-    this.conns = new Map();   // conn -> { id, name, waiting }
+    this.conns = new Map();   // conn -> { id, name, waiting, seen }
     this.host = null;
     this.state = null;        // last { paused, pos, rate, from, seq, s }
     this.media = null;        // last { href, want, from } — what the room is on
+    this.pass = null;         // set by whoever opened the room; '' means none
   }
 
   get members() { return [...this.conns.values()].map(m => ({ id: m.id, name: m.name })); }
@@ -45,17 +60,38 @@ export class Relay {
   /** Re-attach a socket that outlived this object (a hibernated Durable Object). */
   restore(conn, meta) {
     if (!meta?.id) return;
-    this.conns.set(conn, { id: meta.id, name: meta.name || '匿名', waiting: !!meta.waiting });
+    this.conns.set(conn, { id: meta.id, name: meta.name || '匿名', waiting: !!meta.waiting, seen: this.now() });
     if (meta.host) this.host = meta.id;
+    if (meta.pass != null) this.pass = meta.pass;
   }
 
   /**
-   * @returns the member record, or null if the room is full — the caller is
-   *          expected to close the socket in that case.
+   * Turn away a socket with a reason it can show a person.
+   *
+   * A bare close code cannot: the browser only hands the page a number, so
+   * "密码不对" and "房间满了" and "the wifi blinked" all arrive as the same
+   * event and the panel guesses. One frame first, then the close.
    */
-  _join(conn, name) {
-    if (this.conns.size >= MAX_MEMBERS) return null;
-    const me = { id: this.makeId(), name: String(name || '匿名').slice(0, MAX_NAME), waiting: false };
+  _deny(conn, why) {
+    try { conn.send({ t: 'denied', why }); } catch {}
+    try { conn.close?.(); } catch {}
+    return null;
+  }
+
+  /**
+   * @returns the member record, or null if the socket was turned away — the
+   *          relay has already told it why and closed it.
+   */
+  _join(conn, name, pass) {
+    const given = String(pass ?? '').slice(0, MAX_PASS);
+    // The first one in sets the password, exactly as it sets the host seat.
+    // An empty room forgets it, which is what makes a code reusable tomorrow.
+    if (!this.conns.size) this.pass = given;
+    else if ((this.pass || '') !== given) return this._deny(conn, 'pass');
+    if (this.conns.size >= MAX_MEMBERS) return this._deny(conn, 'full');
+
+    const me = { id: this.makeId(), name: String(name || '匿名').slice(0, MAX_NAME),
+                 waiting: false, seen: this.now() };
     this.conns.set(conn, me);
     // First one in is the host. Not a privilege — see sync.js; it is only the
     // member that re-anchors the room and restarts it after a buffer wait.
@@ -76,7 +112,10 @@ export class Relay {
     const me = this.conns.get(conn);
     if (!msg || typeof msg.t !== 'string') return false;
 
-    if (!me) return msg.t === 'hello' ? !!this._join(conn, msg.name) : false;
+    if (!me) return msg.t === 'hello' ? !!this._join(conn, msg.name, msg.pass) : false;
+    // Any frame at all counts as being alive — the ping is only the fallback
+    // for a member who is watching quietly and touching nothing.
+    me.seen = this.now();
 
     switch (msg.t) {
       case 'ping':
@@ -146,6 +185,26 @@ export class Relay {
     }
   }
 
+  /**
+   * Drop members nobody has heard from. Each runtime drives this off its own
+   * timer (an interval on Node, a Durable Object alarm on Cloudflare) because
+   * neither socket layer will report the difference between a member who is
+   * quiet and a member who is gone.
+   *
+   * @returns true if the room changed.
+   */
+  sweep(maxIdle = IDLE_MS) {
+    const cut = this.now() - maxIdle;
+    let changed = false;
+    for (const [conn, m] of [...this.conns]) {
+      if ((m.seen ?? 0) > cut) continue;
+      // leave() does the broadcast, the host handover and the wait release.
+      if (this.leave(conn)) changed = true;
+      try { conn.close?.(); } catch {}
+    }
+    return changed;
+  }
+
   leave(conn) {
     const me = this.conns.get(conn);
     if (!me) return false;
@@ -156,6 +215,10 @@ export class Relay {
     if (this.host === me.id) this.host = this.conns.size ? this.members[0].id : null;
     this._all({ t: 'leave', member: { id: me.id, name: me.name }, host: this.host, members: this.members });
     if (wasWaiting) this._all({ t: 'wait', from: me.id, waiting: false, waiters: this.waiters });
+    // An empty room is not a room. Forgetting the password here is what lets a
+    // code you like be reused next week with a different one -- and forgetting
+    // the film keeps a joiner from being sent to last night's episode.
+    if (!this.conns.size) { this.pass = null; this.state = null; this.media = null; }
     return true;
   }
 

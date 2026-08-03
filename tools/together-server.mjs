@@ -28,6 +28,7 @@ const PORT = Number(process.env.PORT || 31614);
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_FRAME = 1 << 20;      // 1 MiB. An SDP offer is a few KB; nothing here is big.
 const IDLE_MS = 120_000;        // clients ping every 25s, so silence this long is a dead socket.
+const SWEEP_MS = 15_000;        // how often to look for members nobody has heard from
 
 const rooms = new Map();        // code -> Relay
 
@@ -137,11 +138,32 @@ function attach(socket, code) {
         cont = null;
         let msg; try { msg = JSON.parse(text); } catch { continue; }
         relay.message(conn, msg);
-        if (msg.t === 'hello' && !relay.conns.has(conn)) return end(1013);   // room full
+        // A rejected hello has already been told why and closed by the relay
+        // itself (see Relay._deny), so there is nothing to decide here.
+        if (closed) return;
       }
     }
   });
 }
+
+/**
+ * Members nobody has heard from, on a timer.
+ *
+ * socket.setTimeout() cannot do this job: it is reset by writes as well as
+ * reads (measured -- a socket written to every 120ms never fires a 400ms
+ * timeout), and the host broadcasts an anchor to every member every 5 seconds.
+ * So a member whose laptop lid closed is written to forever, never goes idle,
+ * stays in the member list, and can be handed the host seat -- after which
+ * nobody re-anchors the room at all. The relay decides this from the last
+ * frame it RECEIVED, which is the only thing that actually means "still there".
+ */
+const sweepTimer = setInterval(() => {
+  for (const [code, relay] of [...rooms]) {
+    relay.sweep();
+    if (!relay.size) rooms.delete(code);
+  }
+}, SWEEP_MS);
+sweepTimer.unref?.();   // never the reason the process stays alive
 
 // --- server -----------------------------------------------------------------
 

@@ -33,7 +33,7 @@
 //
 // PROTOCOL
 // Client -> relay
-//   { t:'hello',  name }                     first frame after the socket opens
+//   { t:'hello',  name, pass }               first frame after the socket opens
 //   { t:'ping',   c }                        c = the client's Date.now()
 //   { t:'state',  paused, pos, rate, seq }   my playback position
 //   { t:'media',  href, want }               what I am watching
@@ -51,6 +51,7 @@
 //   { t:'chat',    from, name, text, pos, s }
 //   { t:'signal',  from, data }
 //   { t:'host',    host }
+//   { t:'denied',  why }                     'pass' | 'full', then the socket closes
 //
 // The relay does no interpretation beyond keeping the member list, remembering
 // the last state frame for whoever joins next, and picking a host. Every rule
@@ -81,6 +82,7 @@ export class Room {
     this.url = '';
     this.code = '';
     this.name = '';
+    this.pass = '';
     this.id = null;          // assigned by the relay in `welcome`
     this.host = null;
     this.members = [];
@@ -123,10 +125,10 @@ export class Room {
     return `${base}/room/${encodeURIComponent(this.code)}`;
   }
 
-  connect(url, code, name) {
+  connect(url, code, name, pass = '') {
     this.disconnect();
     this._closing = false;
-    this.url = url; this.code = code; this.name = name;
+    this.url = url; this.code = code; this.name = name; this.pass = pass;
     this._open();
   }
 
@@ -140,7 +142,7 @@ export class Room {
     ws.onopen = () => {
       this._retry = 0;
       this._samples = []; this._pings = 0;
-      ws.send(JSON.stringify({ t: 'hello', name: this.name }));
+      ws.send(JSON.stringify({ t: 'hello', name: this.name, pass: this.pass }));
       this._schedulePing(0);
     };
     ws.onmessage = e => {
@@ -241,6 +243,13 @@ export class Room {
         this.host = m.host ?? this.host;
         break;
       case 'host': this.host = m.host; break;
+      // Turned away on purpose. Retrying a wrong password just retries a wrong
+      // password, once a second, forever -- so this is the one close that is
+      // not a network event and must not be reconnected through.
+      case 'denied':
+        this._closing = true;
+        this._setStatus('closed', m.why === 'pass' ? '密码不对，进不去这个房间' : '房间满了');
+        break;
     }
     this.onEvent(m);
   }

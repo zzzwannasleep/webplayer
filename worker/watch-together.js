@@ -28,6 +28,8 @@
 
 import { Relay } from '../src/together/relay.js';
 
+const SWEEP_MS = 20_000;   // how often the alarm looks for members that vanished
+
 export class WatchRoom {
   constructor(ctx) {
     this.ctx = ctx;
@@ -61,8 +63,38 @@ export class WatchRoom {
   _persist() {
     for (const ws of this.ctx.getWebSockets()) {
       const m = this.relay.conns.get(this._conn(ws));
-      if (m) try { ws.serializeAttachment({ id: m.id, name: m.name, waiting: m.waiting, host: this.relay.host === m.id }); } catch {}
+      if (m) try {
+        ws.serializeAttachment({ id: m.id, name: m.name, waiting: m.waiting,
+                                 host: this.relay.host === m.id, pass: this.relay.pass });
+      } catch {}
     }
+  }
+
+  /**
+   * Wake up occasionally and drop members nobody has heard from.
+   *
+   * An alarm rather than setInterval: with hibernation this object is evicted
+   * between frames, and an interval evaporates with it. The alarm is stored by
+   * the runtime, so it fires whether or not anybody is awake -- which is
+   * exactly the case that needs it, a room where the only member left is one
+   * that stopped existing.
+   *
+   * Re-armed only while there is somebody to sweep, so an empty room costs
+   * nothing, which is the whole point of hibernating in the first place.
+   */
+  async _arm() {
+    if (!this.relay.size) return;
+    try { if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS); }
+    catch {}
+  }
+
+  async alarm() {
+    // A hibernated wake-up rebuilds `seen` as "now" in the constructor, so the
+    // first sweep after an eviction never evicts anybody. That is the safe
+    // direction to be wrong in: one extra sweep interval of patience beats
+    // throwing out a member because the SERVER went to sleep.
+    if (this.relay.sweep()) this._persist();
+    if (this.relay.size) { try { await this.ctx.storage.setAlarm(Date.now() + SWEEP_MS); } catch {} }
   }
 
   async fetch(request) {
@@ -79,11 +111,12 @@ export class WatchRoom {
     try { msg = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message)); }
     catch { return; }
     const conn = this._conn(ws);
+    // A rejected hello -- wrong password, room full -- is told why and closed
+    // by the relay itself through conn.close(), so there is no special case
+    // here any more.
     const changed = this.relay.message(conn, msg);
-    // The room being full is the one case the relay cannot answer with a
-    // frame, because the sender is not a member and has nothing to receive on.
-    if (msg.t === 'hello' && !this.relay.conns.has(conn)) { ws.close(1013, 'room full'); return; }
     if (changed) this._persist();
+    if (msg.t === 'hello') await this._arm();
   }
 
   async webSocketClose(ws) { if (this.relay.leave(this._conn(ws))) this._persist(); }

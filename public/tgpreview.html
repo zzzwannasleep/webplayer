@@ -17,6 +17,11 @@
 -->
 <style>
   :root {
+    /* play.html declares this, and without it a form control's `fieldtext`
+       resolves to black -- which on these backgrounds is an input you cannot
+       read what you typed into. A preview that lies about that is worse than
+       no preview. */
+    color-scheme: dark;
     --bg:#0a0c0f; --panel:#12161b; --panel-2:#171c22; --line:#232a33;
     --fg:#e8ecf1; --dim:#8a95a3; --faint:#5c6672;
     --acc:#4c9aff; --acc-dim:#2b5c99;
@@ -45,8 +50,18 @@
   .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 14px; }
   .card > h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint);
                margin:0 0 10px; font-weight:650; }
-  .before { opacity:.97; }
-  .before h3 { color:var(--err); }
+  .cell.wide { grid-column:1/-1; }
+  /* A stand-in for the picture, so the bar can be seen against something the
+     way it actually is: light text over a moving image. */
+  .fsdemo {
+    position:relative; border:1px solid var(--line); border-radius:var(--r); overflow:hidden;
+    aspect-ratio:16/7; max-width:900px;
+    background:
+      radial-gradient(120% 90% at 22% 18%, #3a4f63 0%, transparent 55%),
+      radial-gradient(90% 80% at 80% 75%, #6a4b3a 0%, transparent 55%),
+      linear-gradient(160deg, #10161d, #0a0d11);
+  }
+  .fsdemo .tgm { padding-bottom:20px; }
 </style>
 </head>
 <body>
@@ -170,6 +185,44 @@ mount('⑧ 开着麦', '语音是浏览器直连，中转不经手。接通状�
   ]);
   tg.chat = [{ sys: true, text: '麦克风已开' }];
 });
+
+// ---- 9. the room wants a password ---------------------------------------
+mount('⑨ 房间要密码', '平时没有密码框。被中转挡回来了，框才出现——已经拿着你刚填的房间号。', tg => {
+  tg.codeIn.value = 'QK7M2D';
+  tg.wantPass = true;
+  tg.chat = [{ sys: true, text: '这个房间要密码' }];
+  tg.room.status = 'closed';
+});
+
+// ---- 10. creating one ----------------------------------------------------
+mount('⑩ 自己加个密码', '想加才有：一行灰字里的「加个密码」。为的是「我们家」这种能记住的房间号能反复用。', tg => {
+  tg.wantPass = true;
+  tg.passIn.value = 'kaimen';
+});
+
+// ---- the fullscreen mini bar --------------------------------------------
+// A different element from the card, shown over the picture. Faked onto a
+// stand-in "video" here because a real one would need a real file.
+{
+  const cell = document.createElement('div');
+  cell.className = 'cell wide';
+  cell.innerHTML = `<h3>⑪ 全屏时</h3><p>全屏的是画面容器，侧边栏整个不在屏幕上——而「谁卡住了」「刚说了什么」恰恰是这时候最想看的。所以有一条压在画面下缘的迷你条，只有最近几句、谁在缓冲、一个输入框。</p>`;
+  const shot = document.createElement('div');
+  shot.className = 'fsdemo';
+  const tg = new TogetherPanel(fakeVideo(), { title: '示例' });
+  fake(tg, { members: WHO, waiters: ['m3'] });
+  tg.chat = [
+    { by: '茶几', text: '这段配乐是真的好', pos: 1832 },
+    { by: '沙发', text: '等下等下，爆米花掉队了', pos: 1841 },
+    { sys: true, text: '等 爆米花 缓冲…' },
+  ];
+  tg.paint();
+  tg.mini.classList.add('on');
+  tg.mini.style.display = 'block';       // no real :fullscreen here
+  shot.append(tg.mini);
+  cell.append(shot);
+  document.getElementById('grid').append(cell);
+}
 </script>
 </body>
 </html>
