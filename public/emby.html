@@ -1085,9 +1085,14 @@ async function play(item, choice, fromStart){
     if (chosenSub) {
       const how = subtitleDelivery(chosenSub);
       if (how === 'client') {
-        // ass/ssa/pgs: draw in-browser. Map to the embedded-only index the
-        // player uses (external subs are not in the container, so exclude them).
+        // Embedded: draw in-browser. Map to the embedded-only index the player
+        // uses (external subs are not in the container, so exclude them).
         q.set('sub', subsList.filter(s=>!s.IsExternal).indexOf(chosenSub));
+        // ...and, for a text stream, carry the server URL as a fallback. A
+        // source that falls back to native playback has no demuxed subtitle
+        // list at all; without this the player could only say so.
+        if (subtitleDelivery({ ...chosenSub, IsExternal: true }) === 'text')
+          q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
       } else if (how === 'text') {
         // external or embedded text sub: let Emby serve SRT into a <track>.
         q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));

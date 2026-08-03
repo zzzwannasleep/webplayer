@@ -164,6 +164,11 @@ async function fill() {
         log(`fill p${fillPasses}: ${got} blk, pos->${readPos}, vidDts=${vr ? (vr.lastDts / vr.timescale).toFixed(1) : '?'}s, ahead=${readAheadSeconds().toFixed(1)}s`);
       }
 
+      // Blocks whose content encoding could not be undone are dropped inside
+      // the demuxer. Say so once per track: a compressed subtitle track that
+      // fails to inflate otherwise just renders nothing, with no way to tell
+      // that apart from a track that genuinely has no cues here.
+      if (state.decodeError) log(`轨道内容解压失败，相关数据包已丢弃：${state.decodeError}`, 'warn');
       if (state.parseError) { log(`demux stopped: ${state.parseError}`, 'warn'); break; }
       if (state.atEnd) { eof = true; postMessage({ type: 'eof' }); break; }
       if (!got) { log(`no blocks at byte ${readPos}; stopping fill`, 'warn'); break; }

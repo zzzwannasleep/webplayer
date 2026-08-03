@@ -517,16 +517,27 @@ export class EmbyClient {
 
 // Decide how a chosen Emby subtitle stream reaches the screen:
 //   'client'      -> demux from the container, draw in-browser (ass/ssa via
-//                    JASSUB, pgs via libpgs). Keeps effects + embedded fonts,
-//                    no server transcode. Only for EMBEDDED ass/ssa/pgs.
+//                    JASSUB, pgs via libpgs, srt/subrip via the browser's own
+//                    TextTrack). Keeps effects + embedded fonts, no server work.
+//                    Only for EMBEDDED streams.
 //   'text'        -> have Emby serve it as SRT into the browser's <track>. For
-//                    external subs and embedded text subs (which have no
-//                    in-browser renderer).
+//                    EXTERNAL (sidecar) text subs, which are not in the
+//                    container and so cannot be demuxed.
 //   'unsupported' -> an external bitmap sub (external pgs/vobsub); no clean path.
+//
+// Embedded SRT used to be routed to 'text' as well, back when there was no
+// in-browser renderer for it. There is one now (src/subs/text.js), and the
+// round trip it replaced was the flaky part: Emby extracts an embedded text
+// stream with ffmpeg on first request, so that URL intermittently answers 404 /
+// 500 / an empty body, which surfaced as "字幕加载失败" on a random subset of
+// plays. Demuxing it locally has no such window.
+// Matched whole, not by substring: "dvb_teletext" contains "text" but has no
+// local renderer, and routing it here would have shown nothing at all.
+const CLIENT_TEXT = new Set(['ass', 'ssa', 'srt', 'subrip', 'mov_text', 'tx3g', 'webvtt', 'vtt']);
 export function subtitleDelivery(stream) {
   const codec = (stream?.Codec || '').toLowerCase();
   const bitmap = /pgs|vobsub|dvbsub|dvb_subtitle|dvd_subtitle/.test(codec);
-  if (!stream?.IsExternal && /ass|ssa|pgs/.test(codec)) return 'client';
+  if (!stream?.IsExternal && (bitmap || CLIENT_TEXT.has(codec))) return 'client';
   if (!bitmap) return 'text';
   return 'unsupported';
 }

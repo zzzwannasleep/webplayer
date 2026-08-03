@@ -606,14 +606,18 @@ function seedChoice() {
   CHOICE.audio = pick(info.audio, WANT.aud, WANT.audlang);
 
   if (WANT.subwarn) player.log(`所选字幕为图形格式，浏览器暂无法外挂渲染：${WANT.subwarn}`, 'warn');
-  if (WANT.suburl) {
+  // Demuxed track first. An embedded text sub arrives with BOTH a track index
+  // and a server URL; the local track is the one that cannot fail halfway
+  // through, because it does not depend on Emby extracting the stream on
+  // demand. The URL is only the fallback for a source we could not demux.
+  // Guarded on length: a native (or unprobed .strm) source has no subtitle
+  // list, and pick() answers 0 for an empty one -- which would then be asked
+  // to render a track that does not exist.
+  if (WANT.sub != null && info.subtitles.length) {
+    CHOICE.sub = pick(info.subtitles, WANT.sub, WANT.sublang);
+  } else if (WANT.suburl) {
     CHOICE.sub = -1;               // client renderer unused; Emby serves it as a <track>
     attachEmbySub();
-  } else if (WANT.sub != null && info.subtitles.length) {
-    // Guarded on length: a native (or unprobed .strm) source has no subtitle
-    // list, and pick() answers 0 for an empty one -- which would then be asked
-    // to render a track that does not exist.
-    CHOICE.sub = pick(info.subtitles, WANT.sub, WANT.sublang);
   } else if (WANT.sub != null) {
     CHOICE.sub = -1;
     player.log('该源未解出字幕轨，客户端字幕不可用（可让 Emby 以 SRT 提供）', 'warn');
@@ -624,11 +628,32 @@ function seedChoice() {
 // <track>. The <track> is a DOM child of <video>, so it survives the src swap
 // each play() does; its mode is re-asserted on every metadata load.
 let extTrack = null;
+/**
+ * Emby extracts a subtitle stream with ffmpeg the first time it is asked for
+ * one, and answers 404 / 500 / an empty body while that is still running. A
+ * single fetch therefore fails on a random subset of plays and succeeds on the
+ * retry -- so retry, rather than reporting a transient as a broken subtitle.
+ * An empty body counts as a failure: it parses to zero cues either way.
+ */
+async function fetchSubtitle(url, tries = 4) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    if (i) await new Promise(r => setTimeout(r, 400 * 2 ** (i - 1)));   // 0.4s, 0.8s, 1.6s
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('字幕 ' + r.status);
+      const text = await r.text();
+      if (!text.trim()) throw new Error('服务器返回了空字幕（仍在提取？）');
+      return text;
+    } catch (e) { last = e; player.log(`字幕读取第 ${i + 1} 次失败：${e.message}`, 'warn'); }
+  }
+  throw last;
+}
 async function attachEmbySub() {
   // a reload (line switch) keeps the <track> that is already there
   if (extTrack) { showExtSub(true); return; }
   try {
-    const srt = await fetch(WANT.suburl).then(r => { if (!r.ok) throw new Error('字幕 ' + r.status); return r.text(); });
+    const srt = await fetchSubtitle(WANT.suburl);
     extTrack = attachSrt(video, srt, { label: WANT.sublabel, language: WANT.sublang || 'und', asDefault: true });
     extOn = true;
     // Re-asserted on every load, but only to whatever the viewer last chose --
@@ -687,6 +712,12 @@ async function selectSub(v) {
 /** The Emby <track> lives outside the demuxed list; one owner for its mode. */
 function showExtSub(on) {
   extOn = on && !!WANT.suburl;
+  // Fetched on demand, not at startup. An embedded text sub now arrives with a
+  // demuxed track AND a server URL, and the demuxed one is preferred -- so the
+  // first time anybody picks the server copy from the menu is the first time it
+  // is worth asking Emby to extract it. Without this the option was in the list
+  // and did nothing.
+  if (extOn && !extTrack) { attachEmbySub(); return; }
   if (extTrack) extTrack.track.mode = extOn ? 'showing' : 'disabled';
 }
 

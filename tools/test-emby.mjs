@@ -11,9 +11,17 @@ assert.equal(subtitleDelivery({ Codec: 'ssa' }), 'client', 'embedded SSA renders
 assert.equal(subtitleDelivery({ Codec: 'PGSSUB' }), 'client', 'embedded PGS renders in-browser');
 assert.equal(subtitleDelivery({ Codec: 'ass', IsExternal: true }), 'text',
   'external ASS has no in-browser path (fonts) — served as SRT text');
-assert.equal(subtitleDelivery({ Codec: 'subrip' }), 'text', 'embedded SRT has no client renderer — served by Emby');
+// Embedded text used to be routed to Emby because there was no client renderer.
+// src/subs/text.js is one, and the server round trip was the flaky half: Emby
+// extracts on demand and answers 404/500/empty while ffmpeg runs.
+assert.equal(subtitleDelivery({ Codec: 'subrip' }), 'client', 'embedded SRT is demuxed and drawn locally');
+assert.equal(subtitleDelivery({ Codec: 'srt' }), 'client', 'embedded SRT (other codec spelling)');
+assert.equal(subtitleDelivery({ Codec: 'mov_text' }), 'client', 'embedded tx3g is demuxed and drawn locally');
+assert.equal(subtitleDelivery({ Codec: 'webvtt' }), 'client', 'embedded WebVTT is demuxed and drawn locally');
 assert.equal(subtitleDelivery({ Codec: 'srt', IsExternal: true }), 'text', 'external SRT — browser <track>');
-assert.equal(subtitleDelivery({ Codec: 'mov_text' }), 'text', 'embedded text — served by Emby');
+assert.equal(subtitleDelivery({ Codec: 'subrip', IsExternal: true }), 'text', 'external SRT, other spelling');
+assert.equal(subtitleDelivery({ Codec: 'dvb_teletext' }), 'text',
+  'an embedded format with no local renderer still falls back to Emby');
 assert.equal(subtitleDelivery({ Codec: 'pgssub', IsExternal: true }), 'unsupported',
   'external bitmap sub has no clean path');
 assert.equal(subtitleDelivery({ Codec: 'vobsub', IsExternal: true }), 'unsupported', 'external VobSub unsupported');
