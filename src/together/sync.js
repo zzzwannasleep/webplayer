@@ -15,10 +15,21 @@
 // already talking to each other, and asking permission to pause is a worse
 // experience than the occasional double-pause.
 //
-// The host still exists, for the two jobs that need one voice: it re-anchors
-// the room every few seconds from its own real playhead (so slow accumulated
-// drift does not become everyone's problem), and it is the one that presses
-// play again after the room has waited for a straggler.
+// The host still exists, for three jobs that need one voice: it re-anchors the
+// room every few seconds from its own real playhead (so slow accumulated drift
+// does not become everyone's problem), it is the one that presses play again
+// after the room has waited for a straggler, and it is the one that says what
+// the room is watching.
+//
+// WHO IS ALLOWED TO SPEAK
+// Only a member whose element actually holds a film. This is not a permission
+// system, it is arithmetic: an element that never loaded anything reports
+// `paused` and `currentTime === 0`, and those describe the absence of a film
+// rather than a decision about one. Before this rule a member who could not
+// open the source — wrong account, expired link, autoplay refused — broadcast
+// "paused at 0" on every failed play(), and every other member dutifully
+// jumped to the start and stopped. The room looked like it was pausing itself
+// at random. It was not: it was obeying somebody who had nothing to say.
 //
 // CORRECTING DRIFT
 // Jellyfin's SyncPlay nudges playbackRate between 50ms and 3s of drift and
@@ -40,6 +51,14 @@ const MAX_NUDGE = 0.08;    // ±8% of the room's playback rate
 const SETTLE_MS = 3000;    // after a seek, let the pipeline refill before judging
 const ANCHOR_MS = 5000;    // how often the host re-anchors the room
 const TICK_MS   = 500;
+const QUIET_MS  = 1200;    // an event this soon after we drove the element is ours
+const HOLD_MAX_MS = 20_000; // stop waiting for a straggler that never arrives
+
+// HAVE_METADATA. Below this the element has no film in it: currentTime is 0 and
+// paused is true because nothing was ever loaded, not because anybody decided
+// anything. Those are the two values that used to get broadcast as if they were
+// a human pressing pause at the start of the film — see _canSpeak().
+const HAVE_METADATA = 1;
 
 export class PlaybackSync {
   /**
@@ -57,27 +76,68 @@ export class PlaybackSync {
     this.waiters = [];             // ids the room is waiting for
     this.drift = 0;                // seconds; + means we are ahead
     this.baseRate = 1;             // the speed the room agreed on
+    this.media = null;             // { href, want, from } — what the room is watching
 
-    this._applying = false;        // suppress echo while we drive the element
+    // Echo suppression, per event. A boolean cleared on setTimeout(…, 0) does
+    // not work: a media element queues its events on its own task source, and
+    // nothing in the spec orders that against a timer, so the event routinely
+    // arrived after the flag had already been cleared and got broadcast as if a
+    // human had done it. A deadline per event type cannot lose that race, and
+    // keeping them separate means a playbackRate nudge does not also swallow a
+    // real pause 200ms later.
+    this._quiet = { play: 0, pause: 0, seeking: 0 };
     this._settleUntil = 0;
     this._lastAnchor = 0;
     this._heldPlaying = false;     // were we playing when the room started waiting
+    this._holdSince = 0;           // when the current buffer hold began
+    this._giveUp = new Set();      // members we have stopped waiting for
     this._wasWaiting = false;      // last value sent, so a repeat is not re-sent
     this._seq = -1;
     this._tick = null;
     this._onEv = {};
   }
 
+  /**
+   * Is this element entitled to an opinion about where the film is?
+   *
+   * An element that never loaded anything still reads `paused === true` and
+   * `currentTime === 0`, and those are not facts about the film — they are the
+   * absence of one. Broadcasting them is what let a member who could not open
+   * the source at all drag the whole room back to the start and pause it, over
+   * and over, which is the failure this guard exists to stop. Below
+   * HAVE_METADATA a member listens and says nothing.
+   */
+  get _canSpeak() { return this.video.readyState >= HAVE_METADATA; }
+
+  /** Drive the element ourselves, and do not mistake the fallout for a person. */
+  _drive(events, fn) {
+    const until = Date.now() + QUIET_MS;
+    for (const e of events) this._quiet[e] = until;
+    try { fn(); } catch (e) { this.log(`一起看：${e.message}`, 'warn'); }
+  }
+  _ours(ev) { return Date.now() < this._quiet[ev]; }
+
   start() {
     if (this.enabled) return;
     this.enabled = true;
     const v = this.video;
-    // Explicit user actions. `seeking` rather than `seeked`: the other members
-    // should start moving while this browser is still refilling, not after.
-    this._bind(v, 'play',        () => this._broadcast());
-    this._bind(v, 'pause',       () => this._broadcast());
-    this._bind(v, 'seeking',     () => { this._settleUntil = Date.now() + SETTLE_MS; this._broadcast(); });
-    this._bind(v, 'ratechange',  () => this._broadcast());
+    // Explicit user actions, and only those. `seeking` rather than `seeked`: the
+    // other members should start moving while this browser is still refilling,
+    // not after.
+    //
+    // There is deliberately no `ratechange` listener. The correction loop writes
+    // playbackRate every tick, so that event fires constantly for reasons no
+    // human caused — and each one used to put a full state frame on the wire,
+    // which is how a member who was merely drifting ended up re-anchoring the
+    // room several times a second. A speed the viewer actually chose arrives
+    // through setRate(), which broadcasts on purpose.
+    this._bind(v, 'play',        () => { if (!this._ours('play')) this._broadcast(); });
+    this._bind(v, 'pause',       () => { if (!this._ours('pause')) this._broadcast(); });
+    this._bind(v, 'seeking',     () => {
+      if (this._ours('seeking')) return;
+      this._settleUntil = Date.now() + SETTLE_MS;
+      this._broadcast();
+    });
     // Buffering. `waiting` fires when the element runs out of data; `playing`
     // when it has some again. Together they are the lockstep signal.
     this._bind(v, 'waiting',     () => this._setWaiting(true));
@@ -97,6 +157,7 @@ export class PlaybackSync {
     this._onEv = {};
     this.video.playbackRate = this.baseRate;
     this.state = null; this.waiters = []; this.drift = 0;
+    this._giveUp.clear();
     this.onChange();
   }
 
@@ -104,14 +165,41 @@ export class PlaybackSync {
   onMessage(m) {
     if (!this.enabled) return;
     if (m.t === 'state') this._adopt(m);
-    else if (m.t === 'wait') { this.waiters = m.waiters || []; this._applyHold(); }
-    else if (m.t === 'welcome' && m.state) this._adopt({ ...m.state, seq: -1 });
+    else if (m.t === 'wait') {
+      // A member that came back deserves to be waited for again.
+      if (m.waiting === false && m.from) this._giveUp.delete(m.from);
+      this._setWaiters(m.waiters);
+    }
+    else if (m.t === 'media') this._onMedia(m);
+    else if (m.t === 'welcome') {
+      if (m.media) this._onMedia({ ...m.media, replay: true });
+      if (m.state) this._adopt({ ...m.state, seq: -1 });
+    }
     else if (m.t === 'leave') {
       // A member that vanished mid-buffer would otherwise hold the room
       // paused forever.
-      this.waiters = this.waiters.filter(id => id !== m.member?.id);
-      this._applyHold();
+      this._giveUp.delete(m.member?.id);
+      this._setWaiters(this.waiters.filter(id => id !== m.member?.id));
     }
+  }
+
+  _setWaiters(list) {
+    const next = (list || []).filter(id => !this._giveUp.has(id));
+    const was = this.waiting;
+    this.waiters = next;
+    if (this.waiting && !was) this._holdSince = Date.now();
+    this._applyHold();
+  }
+
+  /**
+   * The room said what it is watching. Nothing is opened from here — the panel
+   * owns that decision, because auto-navigating a page out from under somebody
+   * who is already watching the right film is worse than the problem.
+   */
+  _onMedia(m) {
+    if (!m.want && !m.href) return;
+    this.media = { href: m.href || '', want: m.want || null, from: m.from };
+    this.onChange();
   }
 
   /** Where the room says the film is, right now. null when nothing is set. */
@@ -129,7 +217,7 @@ export class PlaybackSync {
   _bind(el, ev, fn) { this._onEv[ev] = fn; el.addEventListener(ev, fn); }
 
   _broadcast() {
-    if (!this.enabled || this._applying || !this.room.connected) return;
+    if (!this.enabled || !this.room.connected || !this._canSpeak) return;
     const v = this.video;
     if (!Number.isFinite(v.currentTime)) return;
     // Report the speed the room should run at, not the corrected one this
@@ -139,8 +227,18 @@ export class PlaybackSync {
     this._lastAnchor = Date.now();
   }
 
+  /** Tell the room what this member is watching. Host only — see panel.js. */
+  shareMedia({ href = '', want = null } = {}) {
+    if (!this.room.connected) return false;
+    this.media = { href, want, from: this.room.id };
+    return this.room.sendMedia({ href, want });
+  }
+
   _setWaiting(waiting) {
-    if (this._applying) return;
+    // A member with nothing loaded is not buffering, it is empty — and holding
+    // seven people because an eighth never opened the film is the bug, not the
+    // feature. It stays silent until it has metadata.
+    if (waiting && !this._canSpeak) return;
     if (this._wasWaiting === waiting) return;
     this._wasWaiting = waiting;
     this.room.sendWait(waiting);
@@ -160,9 +258,14 @@ export class PlaybackSync {
     if (m.from === this.room.id) { this.onChange(); return; }   // our own frame, echoed
 
     const v = this.video;
+    // Nothing is loaded here: there is no playhead to move and calling play()
+    // on an empty element only produces a rejection, whose `pause` event used
+    // to go straight back out as "this member paused the film". Adopt the
+    // numbers so the UI can show them, touch nothing.
+    if (!this._canSpeak) { this.onChange(); return; }
+
     const want = this.target();
-    this._applying = true;
-    try {
+    this._drive(['play', 'pause', 'seeking'], () => {
       // Jump only when it is a real jump. A remote pause/play at roughly our
       // position must not turn into a seek, or every pause in the room costs
       // everyone a buffer refill.
@@ -171,15 +274,28 @@ export class PlaybackSync {
         this._settleUntil = Date.now() + SETTLE_MS;
       }
       if (this.state.paused && !v.paused) v.pause();
-      else if (!this.state.paused && v.paused && !this.waiting) v.play().catch(e => this.log(`一起看：无法自动播放（${e.message}）`, 'warn'));
+      else if (!this.state.paused && v.paused && !this.waiting) this._play();
       v.playbackRate = this.baseRate;
-    } finally {
-      // Released on the next task: pause()/play() fire their events
-      // asynchronously, and clearing the flag synchronously would let our own
-      // reaction to them bounce back into the room.
-      setTimeout(() => { this._applying = false; }, 0);
-    }
+    });
     this.onChange();
+  }
+
+  /**
+   * play(), with the two ways it fails told apart. Autoplay policy is the
+   * common one and it is not an error in the room — it is this browser asking
+   * for a click. Either way the rejection must not become a state frame, which
+   * is why the quiet window is re-armed around the async half as well.
+   */
+  _play() {
+    const p = this.video.play();
+    if (!p?.catch) return;
+    p.catch(e => {
+      this._quiet.pause = Date.now() + QUIET_MS;
+      this.log(e.name === 'NotAllowedError'
+        ? '一起看：浏览器拦了自动播放，点一下画面就跟上了'
+        : `一起看：无法播放（${e.message}）`, 'warn');
+      this.onChange();
+    });
   }
 
   /**
@@ -189,8 +305,7 @@ export class PlaybackSync {
    */
   _applyHold() {
     const v = this.video;
-    this._applying = true;
-    try {
+    this._drive(['play', 'pause'], () => {
       if (this.waiting) {
         if (!v.paused) { this._heldPlaying = true; v.pause(); }
       } else if (this._heldPlaying) {
@@ -199,13 +314,31 @@ export class PlaybackSync {
         // frame at once and the last one wins by luck.
         if (this.room.isHost) { setTimeout(() => this._resume(), 120); }
       }
-    } finally { setTimeout(() => { this._applying = false; }, 0); }
+    });
     this.onChange();
   }
 
+  /**
+   * Waiting for a straggler is right; waiting for a member who is never going
+   * to arrive is how the room ends up frozen with no explanation. After
+   * HOLD_MAX_MS the room stops counting whoever is still buffering and carries
+   * on without them; they rejoin the lockstep the moment they report ready.
+   *
+   * Decided locally, by every member, off the same clock — so it does not
+   * depend on the relay, and it stays true even if the member holding the room
+   * is the one whose network died.
+   */
+  _giveUpOnStragglers() {
+    for (const id of this.waiters) this._giveUp.add(id);
+    const names = this.waiters.map(id => this.room.nameOf(id)).join('、');
+    this._holdSince = 0;
+    this._setWaiters([]);
+    this.log(`一起看：等了 ${HOLD_MAX_MS / 1000} 秒还没缓冲好，先不等 ${names} 了`, 'warn');
+  }
+
   _resume() {
-    if (!this.enabled || this.waiting) return;
-    this.video.play().catch(() => {});
+    if (!this.enabled || this.waiting || !this._canSpeak) return;
+    this._drive(['play'], () => this._play());
     this._broadcast();
   }
 
@@ -215,13 +348,23 @@ export class PlaybackSync {
     if (!this.enabled || !this.room.connected) return;
     const v = this.video, s = this.state;
 
+    // Nobody waits forever. Checked here rather than on a timer of its own
+    // because this tick is already running at 500ms and a hold does not need
+    // finer resolution than that.
+    if (this.waiting && this._holdSince && Date.now() - this._holdSince > HOLD_MAX_MS) {
+      this._giveUpOnStragglers();
+    }
+
     // The host re-anchors the room from its own real playhead. Everything else
     // in the room is a projection off that, so leaving it stale for an hour
     // means the projection carries an hour's worth of accumulated rate error.
-    if (this.room.isHost && Date.now() - this._lastAnchor > ANCHOR_MS) this._broadcast();
+    // A host with nothing loaded has no playhead to anchor from — it would be
+    // broadcasting "paused at 0", which is exactly the frame that used to drag
+    // everybody back to the start of the film.
+    if (this.room.isHost && this._canSpeak && Date.now() - this._lastAnchor > ANCHOR_MS) this._broadcast();
 
-    if (!s || s.paused || v.paused || this.waiting || this.room.isHost) {
-      if (v.playbackRate !== this.baseRate) v.playbackRate = this.baseRate;
+    if (!s || s.paused || v.paused || this.waiting || this.room.isHost || !this._canSpeak) {
+      this._setRate(this.baseRate);
       this.drift = 0;
       return;
     }
@@ -234,26 +377,29 @@ export class PlaybackSync {
     const ms = Math.abs(drift) * 1000;
 
     if (ms > SEEK_MS) {
-      this._applying = true;
-      v.currentTime = Math.max(0, want);
+      this._drive(['seeking'], () => { v.currentTime = Math.max(0, want); });
       this._settleUntil = Date.now() + SETTLE_MS;
-      setTimeout(() => { this._applying = false; }, 0);
       this.log(`一起看：偏差 ${drift.toFixed(1)}s，已跳转对齐`);
-      v.playbackRate = this.baseRate;
+      this._setRate(this.baseRate);
     } else if (ms > DEAD_MS) {
       // Negative drift (behind) has to speed up, so the sign flips.
       const nudge = Math.max(-MAX_NUDGE, Math.min(MAX_NUDGE, -drift * 1000 / ABSORB_MS));
-      v.playbackRate = this.baseRate * (1 + nudge);
-    } else if (v.playbackRate !== this.baseRate) {
-      v.playbackRate = this.baseRate;
+      this._setRate(this.baseRate * (1 + nudge));
+    } else {
+      this._setRate(this.baseRate);
     }
     this.onChange();
+  }
+
+  /** A correction, not a choice. Never reaches the room — see start(). */
+  _setRate(rate) {
+    if (this.video.playbackRate !== rate) this.video.playbackRate = rate;
   }
 
   /** The speed the viewer picked, as opposed to a correction. */
   setRate(rate) {
     this.baseRate = rate;
-    this.video.playbackRate = rate;
+    this._setRate(rate);
     this._broadcast();
   }
 }

@@ -26,6 +26,7 @@ const newId = () => {
 const MAX_NAME = 24;
 const MAX_CHAT = 500;
 const MAX_MEMBERS = 32;
+const MAX_HREF = 4096;    // a signed stream URL with a token is long; a novel is not
 
 export class Relay {
   constructor({ now = () => Date.now(), makeId = newId } = {}) {
@@ -34,6 +35,7 @@ export class Relay {
     this.conns = new Map();   // conn -> { id, name, waiting }
     this.host = null;
     this.state = null;        // last { paused, pos, rate, from, seq, s }
+    this.media = null;        // last { href, want, from } — what the room is on
   }
 
   get members() { return [...this.conns.values()].map(m => ({ id: m.id, name: m.name })); }
@@ -59,7 +61,10 @@ export class Relay {
     // member that re-anchors the room and restarts it after a buffer wait.
     if (!this.host || !this.members.some(m => m.id === this.host)) this.host = me.id;
     const s = this.now();
-    conn.send({ t: 'welcome', you: me.id, host: this.host, members: this.members, state: this.state, s });
+    // `media` before `state`: knowing WHICH film the numbers refer to is what
+    // stops a joiner from applying somebody else's playhead to nothing at all.
+    conn.send({ t: 'welcome', you: me.id, host: this.host, members: this.members,
+                media: this.media, state: this.state, s });
     this._others(conn, { t: 'join', member: { id: me.id, name: me.name }, host: this.host, members: this.members });
     // A member that joins mid-wait must be told, or it plays on alone.
     if (this.waiters.length) conn.send({ t: 'wait', from: me.id, waiting: false, waiters: this.waiters });
@@ -86,6 +91,23 @@ export class Relay {
         this.state = { paused: !!msg.paused, pos: msg.pos, rate: Number(msg.rate) || 1,
                        from: me.id, seq: msg.seq ?? 0, s: this.now() };
         this._all({ t: 'state', ...this.state });
+        return true;
+      }
+
+      // What the room is watching. Kept, like `state`, so a joiner five minutes
+      // late is told the film rather than left staring at an empty player —
+      // which was the whole reason a member could never get a picture.
+      //
+      // The relay forwards the descriptor and does not read it. The bytes of
+      // the film never come near here: every member fetches the source itself,
+      // with its own credentials where it has them (see panel.js). A relay
+      // stays cheap whether the room is watching a trailer or a 4K remux.
+      case 'media': {
+        const href = typeof msg.href === 'string' ? msg.href.slice(0, MAX_HREF) : '';
+        const want = msg.want && typeof msg.want === 'object' ? msg.want : null;
+        if (!href && !want) return false;
+        this.media = { href, want, from: me.id, s: this.now() };
+        this._all({ t: 'media', ...this.media });
         return true;
       }
 

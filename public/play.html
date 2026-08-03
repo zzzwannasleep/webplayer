@@ -611,7 +611,74 @@ $('#dmkBtn').addEventListener('click', () => dmk?.toggle());
 // Nothing about the relay is in this repository. The address lives in
 // localStorage, exactly like the Emby servers, and an invite link carries it in
 // the URL FRAGMENT so it is never sent to whatever is hosting these files.
-tg = new TogetherPanel(video, { log: player.log, button: $('#tgBtn'), title: WANT.title || '' });
+// WHAT THE ROOM IS WATCHING
+// Syncing a playhead without saying what it is a playhead INTO is how a member
+// ended up in a room with an empty player, being told to jump to 41:20 of
+// nothing. So the host also shares a descriptor, and the relay forwards it —
+// the descriptor only, never the bytes. Every member fetches the film itself,
+// straight from Emby, exactly as it would if it had opened the episode by hand.
+//
+// The descriptor is the query string this page already runs on, minus the two
+// things that belong to one person: `t` (where the host happens to be, which is
+// what the playback sync is for) and `ps` (the host's Emby PlaySessionId, which
+// would make two people report progress as one session).
+//
+// `api_key` is stripped from the stream URL and re-added by the receiver from
+// its OWN login, so members on the same server play under their own account and
+// the host's token is not what makes it work. `href` keeps the host's playable
+// URL as the fallback for a member with no Emby session of their own — a guest
+// on someone else's film — which is the case that has to work at all.
+const SHARED = ['url', 'title', 'id', 'src', 'size', 'aud', 'audlang',
+                'sub', 'sublang', 'suburl', 'subwarn', 'sublabel', 'series', 'ep', 'direct'];
+const dropKey = u => { try { const x = new URL(u, location.href); x.searchParams.delete('api_key'); return x.toString(); } catch { return u; } };
+const withKey = u => {
+  if (!EM?.token) return u;
+  try { const x = new URL(u, location.href); x.searchParams.set('api_key', EM.token); return x.toString(); } catch { return u; }
+};
+
+const togetherMedia = {
+  describe() {
+    if (!WANT.url && !WANT.direct) return null;
+    const want = { server: EM?.server || '' };
+    for (const k of SHARED) if (P.get(k)) want[k] = P.get(k);
+    want.title = WANT.title;
+    if (want.url) want.url = dropKey(want.url);
+    if (want.suburl) want.suburl = dropKey(want.suburl);
+    // The host's own copy, token and all. Only reached by a member who cannot
+    // rebuild one — see the receiver below.
+    return { want, href: `${location.pathname}?${P}` };
+  },
+
+  /** Already watching this? Compare the item, not the URL: the URLs differ by
+   *  whose token is in them, and by which line the member is on. */
+  same(want, href) {
+    if (!want) return href ? href.split('#')[0] === `${location.pathname}?${P}` : false;
+    if (want.id && WANT.id) return want.id === WANT.id && (want.src || '') === (WANT.src || '');
+    return dropKey(want.url || '') === dropKey(WANT.url || '') && (want.direct || '') === (WANT.direct || '');
+  },
+
+  open(want, href, hash) {
+    // No descriptor, or a film on an Emby this member has never logged into:
+    // take the host's link as given. It carries the host's api_key, which is
+    // the only reason a guest can watch at all.
+    const sameServer = want?.server && EM?.server && want.server === EM.server;
+    if (!want || (want.url && !sameServer && !want.direct)) {
+      if (!href) throw new Error('房主没给出可打开的地址');
+      location.href = href + hash;
+      return;
+    }
+    const q = new URLSearchParams();
+    for (const k of SHARED) if (want[k]) q.set(k, want[k]);
+    // Same server, my account: rebuild the two token-bearing URLs with my own.
+    if (sameServer) {
+      if (want.url) q.set('url', withKey(want.url));
+      if (want.suburl) q.set('suburl', withKey(want.suburl));
+    }
+    location.href = `./play.html?${q}${hash}`;
+  },
+};
+
+tg = new TogetherPanel(video, { log: player.log, button: $('#tgBtn'), title: WANT.title || '', media: togetherMedia });
 $('#logCard').before(tg.el);
 {
   const invite = TogetherPanel.inviteFromHash();

@@ -16,25 +16,37 @@
 // lives in localStorage, exactly like the Emby servers.
 //
 // WHAT GOES OVER IT
-// Playback state, chat, and WebRTC signalling. NOT voice: once two members
-// have exchanged an offer through here, their audio goes peer to peer and the
-// relay never sees a byte of it (see voice.js). A relay therefore stays cheap
-// no matter how long the film is.
+// Playback state, a DESCRIPTION of what the room is watching, chat, and WebRTC
+// signalling.
+//
+// Not the film. The `media` frame carries an item reference and a URL, a few
+// hundred bytes; every member then fetches the source itself, straight from
+// wherever it lives, exactly as it would if it had opened the episode by hand.
+// Proxying the video through the relay would turn a free tier into a bandwidth
+// bill and put a second hop between every viewer and their own server, to solve
+// a problem nobody has — the members can all already reach the file, that is
+// why they are in the room.
+//
+// And not voice: once two members have exchanged an offer through here, their
+// audio goes peer to peer and the relay never sees a byte of it (see voice.js).
+// A relay therefore stays cheap no matter how long the film is.
 //
 // PROTOCOL
 // Client -> relay
 //   { t:'hello',  name }                     first frame after the socket opens
 //   { t:'ping',   c }                        c = the client's Date.now()
 //   { t:'state',  paused, pos, rate, seq }   my playback position
+//   { t:'media',  href, want }               what I am watching
 //   { t:'wait',   waiting }                  I am buffering / I am ready
 //   { t:'chat',   text, pos }                pos = playhead when it was typed
 //   { t:'signal', to, data }                 WebRTC SDP/ICE for one member
 //   { t:'claim' }                            take the host seat
 // Relay -> client
-//   { t:'welcome', you, host, members, state, s }
+//   { t:'welcome', you, host, members, media, state, s }
 //   { t:'pong',    c, s }                    s = the relay's Date.now()
 //   { t:'join'|'leave', member, host, members }
 //   { t:'state',   from, paused, pos, rate, seq, s }
+//   { t:'media',   from, href, want, s }
 //   { t:'wait',    from, waiting, waiters }
 //   { t:'chat',    from, name, text, pos, s }
 //   { t:'signal',  from, data }
@@ -169,6 +181,8 @@ export class Room {
   sendState({ paused, pos, rate }) {
     return this.send({ t: 'state', paused, pos, rate, seq: ++this._seq });
   }
+  /** Say what this member is watching, so the rest of the room can open it. */
+  sendMedia({ href, want }) { return this.send({ t: 'media', href, want }); }
   sendChat(text, pos) { return this.send({ t: 'chat', text, pos }); }
   sendWait(waiting)   { return this.send({ t: 'wait', waiting }); }
   signal(to, data)    { return this.send({ t: 'signal', to, data }); }

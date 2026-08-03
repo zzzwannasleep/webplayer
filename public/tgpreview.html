@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一起看 · 面板预览</title>
+<!--
+  The 一起看 card, in every state it has, side by side.
+
+  It mounts the REAL TogetherPanel -- same module the player uses, same styles
+  -- against a stubbed room, so what is on screen here is what ships. A mockup
+  would let the layout drift from the component the moment either changed; this
+  cannot, because there is only one component.
+
+  Nothing here connects to anything. Open it with `npm run serve` and visit
+  /public/tgpreview.html.
+-->
+<style>
+  :root {
+    --bg:#0a0c0f; --panel:#12161b; --panel-2:#171c22; --line:#232a33;
+    --fg:#e8ecf1; --dim:#8a95a3; --faint:#5c6672;
+    --acc:#4c9aff; --acc-dim:#2b5c99;
+    --ok:#5fd68a; --warn:#f0b429; --err:#ff6b63; --dv:#f5c451;
+    --r:9px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg); padding:26px 20px 60px;
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  }
+  h1 { font-size:17px; margin:0 0 4px; font-weight:650; }
+  .lede { color:var(--dim); font-size:13px; margin:0 0 26px; max-width:70ch; }
+  .lede code { background:var(--panel-2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:12px; }
+  .grid { display:grid; gap:22px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); align-items:start; }
+  .cell > h3 { font-size:11px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint);
+               margin:0 0 3px; font-weight:650; }
+  .cell > p { font-size:12px; color:var(--dim); margin:0 0 9px; min-height:2.9em; }
+  .btn {
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    color:var(--fg); padding:6px 12px; font:inherit; font-size:13px; cursor:pointer;
+  }
+  .btn:hover { border-color:var(--acc-dim); background:#1c232b; }
+  .btn.ghost { background:transparent; color:var(--dim); }
+  .btn.ghost:hover { color:var(--fg); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 14px; }
+  .card > h2 { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint);
+               margin:0 0 10px; font-weight:650; }
+  .before { opacity:.97; }
+  .before h3 { color:var(--err); }
+</style>
+</head>
+<body>
+
+<h1>一起看 · 面板预览</h1>
+<p class="lede">
+  下面每一张卡片都是<b>真的组件</b>（<code>src/together/panel.js</code>），不是截图也不是仿写——
+  房间是假的，面板是真的。所以这里长什么样，播放页里就长什么样。
+</p>
+
+<div class="grid" id="grid"></div>
+
+<script type="module">
+import { TogetherPanel, panelStyles } from '../src/together/panel.js';
+
+document.head.append(Object.assign(document.createElement('style'), { textContent: panelStyles() }));
+
+// A <video> the panel can hold without a file behind it. readyState is the one
+// property it actually reads (see PlaybackSync._canSpeak).
+const fakeVideo = (readyState = 4) => Object.assign(document.createElement('video'), { currentTime: 0 })
+  && Object.defineProperty(document.createElement('video'), 'readyState', { get: () => readyState });
+
+/**
+ * Mount the real panel and then lie to it about the room.
+ *
+ * `connected`, `isHost` and `rtt` are getters on Room, so they are shadowed on
+ * the instance rather than assigned -- assigning to a getter is a silent no-op
+ * in sloppy mode and a throw in a module, which is exactly the kind of thing a
+ * preview page should not be spending an afternoon on.
+ */
+function mount(title, note, setup, { first = false } = {}) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.innerHTML = `<h3></h3><p></p>`;
+  cell.querySelector('h3').textContent = title;
+  cell.querySelector('p').textContent = note;
+
+  // Each panel gets its own remembered settings, so "first run" really is one.
+  const KEY = 'linweb:together';
+  const saved = localStorage.getItem(KEY);
+  localStorage.setItem(KEY, first ? '{}' : JSON.stringify({ relay: 'https://linweb-together.example.workers.dev', name: '沙发' }));
+
+  const tg = new TogetherPanel(fakeVideo(), { title: '示例' });
+  localStorage.setItem(KEY, saved ?? '{}');
+
+  setup?.(tg);
+  tg.paint();
+  cell.append(tg.el);
+  document.getElementById('grid').append(cell);
+  return tg;
+}
+
+const fake = (tg, { status = 'open', code = 'QK7M2D', me = 'm1', host = 'm1',
+                    members = [], rtt = 34, waiters = [] } = {}) => {
+  const r = tg.room;
+  r.status = status; r.code = code; r.id = me; r.host = host; r.members = members;
+  Object.defineProperty(r, 'connected', { get: () => status === 'open', configurable: true });
+  Object.defineProperty(r, 'isHost', { get: () => host === me, configurable: true });
+  Object.defineProperty(r, 'rtt', { get: () => rtt, configurable: true });
+  tg.sync.waiters = waiters;
+};
+
+const WHO = [{ id: 'm1', name: '沙发' }, { id: 'm2', name: '茶几' }, { id: 'm3', name: '爆米花' }];
+
+// ---- 1. first run --------------------------------------------------------
+mount('① 第一次用', '没有中转地址：说清楚这是什么，把地址框摆出来，按钮先按不动。', tg => {
+  tg.relay.value = '';
+}, { first: true });
+
+// ---- 2. lobby, remembered ------------------------------------------------
+mount('② 用过一次之后', '地址记住了 → 折成一行灰字。整张卡就一个输入框、一个按钮。', tg => {
+  tg.codeIn.value = '';
+});
+
+// ---- 3. lobby, joining ---------------------------------------------------
+mount('③ 填了房间号', '按钮自己改口说「加入房间」——留空才是开新的，不用你选。', tg => {
+  tg.codeIn.value = 'QK7M2D';
+});
+
+// ---- 4. in a room --------------------------------------------------------
+mount('④ 房间里', '大堂那一套整个消失。房间号是最大的字，因为那是要念给人听的。', tg => {
+  fake(tg, { members: WHO.slice(0, 2) });
+  tg.chat = [
+    { sys: true, text: '已连上房间 QK7M2D' },
+    { sys: true, text: '茶几 进来了' },
+    { by: '茶几', text: '开了开了', pos: 12.5 },
+    { by: '沙发', text: '等我倒杯水', pos: 41 },
+  ];
+});
+
+// ---- 5. someone is buffering --------------------------------------------
+mount('⑤ 有人卡住了', '以前画面停了没人知道为什么。现在谁在缓冲，名字后面就挂着。', tg => {
+  fake(tg, { members: WHO, waiters: ['m3'] });
+  tg.chat = [
+    { sys: true, text: '等 爆米花 缓冲…' },
+    { by: '茶几', text: '他网又炸了', pos: 631 },
+  ];
+  tg.sync.drift = 0;
+});
+
+// ---- 6. the room is on something else -----------------------------------
+mount('⑥ 房间换片了', '不硬把人拽走：一句话加一个按钮，点不点自己定。空播放器才自动跟。', tg => {
+  fake(tg, { members: WHO.slice(0, 2), me: 'm2', host: 'm1' });
+  tg.offer = { want: { title: '沙丘 S01E03' }, href: '' };
+  tg.chat = [{ sys: true, text: '房间换成了《沙丘 S01E03》，点"跟上房间"切过去' }];
+});
+
+// ---- 7. reconnecting -----------------------------------------------------
+mount('⑦ 断线重连中', '不掉回大堂——房间还在，只是线断了。掉回去看着像被踢了。', tg => {
+  fake(tg, { status: 'retrying', members: WHO.slice(0, 2), rtt: null });
+  tg.chat = [{ sys: true, text: '连接断开（1006）1.4s 后重试' }];
+});
+
+// ---- 8. voice on ---------------------------------------------------------
+mount('⑧ 开着麦', '语音是浏览器直连，中转不经手。接通状态挂在各人名字后面。', tg => {
+  fake(tg, { members: WHO });
+  tg.voice.on = true;
+  tg.voice.peers = new Map([
+    ['m2', { on: true, state: 'connected' }],
+    ['m3', { on: true, state: 'failed' }],
+  ]);
+  tg.chat = [{ sys: true, text: '麦克风已开' }];
+});
+</script>
+</body>
+</html>

@@ -80,7 +80,14 @@ async function browser(cdpPort) {
 }
 
 const out = [];
-const check = (name, pass, detail = '') => { out.push({ name, pass: !!pass, detail }); };
+// Printed as it happens, not only in the summary. Anything that throws
+// mid-run -- a page that navigated away, a function that is not there in the
+// version under test -- used to take every result collected so far with it,
+// which is the opposite of what you want from the run that just broke.
+const check = (name, pass, detail = '') => {
+  out.push({ name, pass: !!pass, detail });
+  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${name}${pass || !detail ? '' : `  (${detail})`}`);
+};
 /** Poll until `fn()` is truthy — the room is asynchronous end to end. */
 const until = async (fn, ms = 8000) => {
   for (let t = 0; t < ms; t += 150) { const v = await fn().catch(() => null); if (v) return v; await sleep(150); }
@@ -152,6 +159,123 @@ check('B landed near A, not at zero', await until(async () => {
 await A.evalJS(`document.querySelector('#video').pause(); 1`);
 check('a pause in A pauses B', await until(() => B.evalJS(`document.querySelector('#video').paused`)));
 
+// THE HOST PAUSING ITSELF.
+// `waiting` fires whenever the element runs out of data, which for the remux
+// pipeline is routine: a seek, a GOP boundary, a fill throttle. That goes out
+// as "I am buffering", the relay sends it to everyone INCLUDING the sender,
+// and the sender's own hold pauses it. That much is harmless -- it was already
+// stalled. What is not harmless is the `pause` event that pause() then fires:
+// if it escapes the suppression window it goes out as a state frame, and now
+// the room is not held, it is genuinely paused, by nobody. Do it while the
+// picture is moving, because that is when a viewer notices.
+await A.evalJS(`(() => {
+  window.__out = [];
+  const s = tg.room.sendState.bind(tg.room);
+  tg.room.sendState = f => { window.__out.push(f); return s(f); };
+  const v = document.querySelector('#video');
+  v.currentTime = 2; v.play().catch(() => {});
+  return 1;
+})()`);
+await until(() => A.evalJS(`!document.querySelector('#video').paused`));
+await A.evalJS(`window.__out = []; 1`);
+for (let i = 0; i < 3; i++) {
+  await A.evalJS(`document.querySelector('#video').dispatchEvent(new Event('waiting')); 1`);
+  await sleep(300);
+  await A.evalJS(`document.querySelector('#video').dispatchEvent(new Event('playing')); 1`);
+  await sleep(300);
+}
+check('the panel names who the room is waiting for',
+  await B.evalJS(`(() => {
+    tg.sync.waiters = [tg.room.id]; tg.paint();
+    const on = [...document.querySelectorAll('.tgp-who .tag')].some(t => t.textContent === '缓冲中');
+    tg.sync.waiters = []; tg.paint();
+    return on;
+  })()`));
+
+check('the host buffering does not broadcast a pause to the room',
+  (await A.evalJS(`window.__out.filter(f => f.paused).length`)) === 0,
+  `it sent ${JSON.stringify(await A.evalJS(`window.__out`).catch(() => '?'))}`);
+check('the host is still playing after its own buffer stalls',
+  await until(() => A.evalJS(`!document.querySelector('#video').paused`)));
+check('B was not left paused by the host\'s stall',
+  await until(() => B.evalJS(`!document.querySelector('#video').paused`)));
+
+// THE REPORTED FAILURE, in the two browsers that are the only place it showed
+// up: one member cannot open the film at all -- wrong account, dead link, a
+// source this browser will not decode. It reads paused-at-zero, because that is
+// what an empty <video> reads, and it used to broadcast that as if a person had
+// pressed pause. The host was dragged back to the start and stopped, over and
+// over, and the member never saw a picture. Neither browser was doing anything
+// wrong, which is why it was so hard to see from one of them.
+// A source that EXISTS and does not work, which is the shape the real one had:
+// an Emby link the other account cannot read, a codec this browser will not
+// decode, a line that 404s. An element with no src at all is not the same
+// thing -- play() there simply stays pending and says nothing, so it never
+// reproduced anything.
+// Watch what B actually puts on the wire. This is the observable the bug is
+// made of: everything else downstream (the host jumping to 0, the host
+// pausing) is other people obeying these frames.
+await B.evalJS(`(() => {
+  window.__sent = [];
+  const send = tg.room.sendState.bind(tg.room);
+  tg.room.sendState = s => { window.__sent.push(s); return send(s); };
+  const wait = tg.room.sendWait.bind(tg.room);
+  tg.room.sendWait = w => { window.__sent.push({ wait: w }); return wait(w); };
+  return 1;
+})()`);
+await B.evalJS(`(() => {
+  const v = document.querySelector('#video');
+  v.pause(); v.src = '/samples/no-such-film.mp4'; v.load();
+  return 1;
+})()`);
+check('B really has nothing loaded now', await until(() => B.evalJS(`document.querySelector('#video').readyState === 0`)));
+
+await A.evalJS(`(() => { const v = document.querySelector('#video'); v.currentTime = 5; v.play().catch(() => {}); return 1; })()`);
+check('A is playing', await until(() => A.evalJS(`!document.querySelector('#video').paused`)));
+
+// Give the empty member every chance to misbehave: it is told to play, it
+// fails, it buffers, it fails again.
+for (let i = 0; i < 3; i++) {
+  await B.evalJS(`(() => { const v = document.querySelector('#video'); v.play().catch(() => {}); return 1; })()`);
+  await sleep(400);
+}
+// The invariant, stated directly: a member with no film has nothing true to
+// say about where the film is, so it must say nothing at all.
+check('the empty member put nothing on the wire',
+  (await B.evalJS(`window.__sent.length`)) === 0,
+  `it sent ${JSON.stringify(await B.evalJS(`window.__sent`).catch(() => '?'))}`);
+
+check('the empty member did not drag the host back to the start',
+  await A.evalJS(`document.querySelector('#video').currentTime > 4`),
+  `A is at ${await A.evalJS(`document.querySelector('#video').currentTime`).catch(() => '?')}`);
+check('the empty member did not pause the host',
+  !(await A.evalJS(`document.querySelector('#video').paused`)));
+check('the empty member did not freeze the room in a buffer wait',
+  !(await A.evalJS(`tg.sync.waiting`)));
+
+// And it is not silently stuck either: it knows where the room is, so the panel
+// can say so and the moment it gets a source it lands in the right place.
+check('the empty member still tracks the room position',
+  await B.evalJS(`tg.sync.target() > 4`));
+
+// Sharing what the room is watching. play.html was opened with no query string
+// here, so there is no descriptor to send -- the room degrades to position-only
+// sync, and that must not throw. Then a real descriptor is pushed through the
+// relay and B is told about it.
+check('a page with no source describes nothing rather than throwing',
+  await A.evalJS(`tg.media.describe() === null`));
+await A.evalJS(`tg.sync.shareMedia({ href: '/public/play.html?url=%2Fsamples%2Fnative-h264.mp4&title=%E7%89%87%E5%AD%90',
+                                     want: { title: '片子', url: '/samples/native-h264.mp4' } }); 1`);
+check('B is told what the room is watching',
+  await until(() => B.evalJS(`tg.sync.media && tg.sync.media.want.title === '片子'`)));
+check('B, which has nothing open, is sent to it',
+  await until(() => B.evalJS(`location.search.includes('native-h264')`), 6000),
+  `B is at ${await B.evalJS(`location.pathname + location.search`).catch(() => '?')}`);
+check('B kept the room in its address, so the navigation did not drop it',
+  await B.evalJS(`location.hash.includes('together=${ROOM}')`));
+check('B rejoined the room by itself after navigating',
+  await until(() => B.evalJS(`tg.room.connected`), 8000));
+
 // Leaving.
 await A.evalJS(`tg.leave(); 1`);
 check('B sees the room shrink', await until(() => B.evalJS(`tg.room.members.length === 1`)));
@@ -161,7 +285,7 @@ check('B is now the host, so the room still has one',
 check('still no uncaught exception at the end (A)', A.errors.length === 0, A.errors.join(' | '));
 check('still no uncaught exception at the end (B)', B.errors.length === 0, B.errors.join(' | '));
 
-let bad = 0;
-for (const r of out) { if (!r.pass) bad++; console.log(`  ${r.pass ? 'PASS' : 'FAIL'}  ${r.name}${r.pass || !r.detail ? '' : `  (${r.detail})`}`); }
-console.log(bad ? `\n${bad} TOGETHER UI CHECK(S) FAILED` : '\nALL TOGETHER UI CHECKS PASSED');
-process.exit(bad ? 1 : 0);
+const bad = out.filter(r => !r.pass);
+for (const r of bad) console.log(`  FAIL  ${r.name}${r.detail ? `  (${r.detail})` : ''}`);
+console.log(bad.length ? `\n${bad.length} TOGETHER UI CHECK(S) FAILED` : `\nALL TOGETHER UI CHECKS PASSED (${out.length})`);
+process.exit(bad.length ? 1 : 0);

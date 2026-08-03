@@ -112,6 +112,210 @@ const conn = name => ({ name, box: [], send(m) { this.box.push(m); }, last(t) { 
   });
 }
 
+// --- what the room is watching ----------------------------------------------
+// The relay remembers it exactly like a state frame, because a member who joins
+// late needs to be told WHICH film the playhead refers to before the playhead
+// means anything.
+
+console.log('\n=== media ===');
+{
+  const r = new Relay();
+  const a = conn('a'), b = conn('b');
+  r.message(a, { t: 'hello', name: '甲' });
+  r.message(b, { t: 'hello', name: '乙' });
+
+  r.message(a, { t: 'media', href: '/play.html?url=x', want: { id: '77', title: '片子' } });
+  check('a media frame reaches the other member', () => assert.equal(b.last('media').want.id, '77'));
+  check('a media frame is attributed to its sender', () => assert.equal(b.last('media').from, a.last('welcome').you));
+
+  const c = conn('c');
+  r.message(c, { t: 'hello', name: '丙' });
+  check('a late joiner is told what the room is watching',
+    () => assert.equal(c.last('welcome').media.want.title, '片子'));
+  check('an empty media frame is ignored', () => assert.equal(r.message(a, { t: 'media' }), false));
+  r.message(a, { t: 'media', href: 'x'.repeat(9999) });
+  check('href is length-capped', () => assert.equal(b.last('media').href.length, 4096));
+  check('a non-object want is refused rather than forwarded',
+    () => assert.equal(r.message(a, { t: 'media', want: 'nope' }), false));
+}
+
+// --- playback sync ----------------------------------------------------------
+// The half that decides what to DO with a state frame, driven against a fake
+// element. This is where the reported failure lived: a member who could not
+// open the film still answered "paused, at 0", and every other member obeyed —
+// so the host appeared to pause itself at random and the member never saw a
+// picture. The checks below are the invariants that stop that, so they are
+// written as "says nothing", not as "produces the right frame".
+
+console.log('\n=== playback sync ===');
+{
+  const { PlaybackSync } = await import('../src/together/sync.js');
+
+  /** A <video> that fires its events the way a browser does — synchronously
+   *  from inside the call that caused them, which is the ordering the old
+   *  setTimeout(…, 0) suppression could not survive. */
+  class FakeVideo {
+    constructor(readyState = 4) {
+      this.readyState = readyState;         // 0 = nothing was ever loaded
+      this.paused = true; this.playbackRate = 1; this.duration = 3600;
+      this.playFails = null;                // e.g. 'NotAllowedError'
+      this._t = 0; this._h = {};
+    }
+    get currentTime() { return this._t; }
+    set currentTime(v) { this._t = v; this.emit('seeking'); }
+    addEventListener(ev, fn) { (this._h[ev] ??= []).push(fn); }
+    removeEventListener(ev, fn) { this._h[ev] = (this._h[ev] ?? []).filter(f => f !== fn); }
+    emit(ev) { for (const fn of [...(this._h[ev] ?? [])]) fn(); }
+    pause() { if (this.paused) return; this.paused = true; this.emit('pause'); }
+    play() {
+      if (this.playFails) {
+        // Chrome pauses the element and fires `pause` BEFORE the promise
+        // rejects. That event is the one that used to reach the room.
+        this.paused = true; this.emit('pause');
+        return Promise.reject(Object.assign(new Error('blocked'), { name: this.playFails }));
+      }
+      if (this.paused) { this.paused = false; this.emit('play'); }
+      return Promise.resolve();
+    }
+  }
+
+  const fakeRoom = ({ host = false } = {}) => ({
+    id: 'me', host: host ? 'me' : 'them', connected: true, sent: [],
+    get isHost() { return this.host === this.id; },
+    now() { return Date.now(); },
+    nameOf(id) { return id; },
+    sendState(s) { this.sent.push({ t: 'state', ...s }); return true; },
+    sendWait(w) { this.sent.push({ t: 'wait', waiting: w }); return true; },
+    sendMedia(m) { this.sent.push({ t: 'media', ...m }); return true; },
+    said(t) { return this.sent.filter(x => x.t === t); },
+  });
+
+  const rig = (opts = {}) => {
+    const v = new FakeVideo(opts.readyState ?? 4);
+    const room = fakeRoom(opts);
+    const sync = new PlaybackSync(v, room, { log: () => {} });
+    sync.start();
+    room.sent.length = 0;                   // the host seeds one frame on start
+    return { v, room, sync };
+  };
+
+  // THE REPORTED BUG. A member who never got a picture — no source, wrong
+  // account, dead link — is handed the room's position and told it is playing.
+  {
+    const { v, room, sync } = rig({ readyState: 0 });
+    sync.onMessage({ t: 'state', from: 'them', paused: false, pos: 1200, rate: 1, seq: 1, s: Date.now() });
+    check('a member with nothing loaded never answers with a state frame',
+      () => assert.deepEqual(room.said('state'), []));
+    check('a member with nothing loaded is not dragged to the room position',
+      () => assert.equal(v.currentTime, 0));
+    check('a member with nothing loaded still knows where the room is',
+      () => assert.ok(Math.abs(sync.target() - 1200) < 1));
+    // …and it must not hold the room hostage either.
+    v.emit('waiting');
+    check('an empty player does not put the room in a buffer wait',
+      () => assert.deepEqual(room.said('wait'), []));
+    sync.stop();
+  }
+
+  // The same member, but the film IS loaded and autoplay is what refuses. The
+  // rejection fires `pause` synchronously; it is still ours, not a person's.
+  {
+    const { v, room, sync } = rig();
+    v.playFails = 'NotAllowedError';
+    sync.onMessage({ t: 'state', from: 'them', paused: false, pos: 5, rate: 1, seq: 1, s: Date.now() });
+    check('a blocked autoplay does not broadcast a pause back to the room',
+      () => assert.deepEqual(room.said('state'), []));
+    sync.stop();
+  }
+
+  // Adopting somebody else's frame must never bounce back: two members echoing
+  // each other is a room that pauses itself forever.
+  {
+    const { v, room, sync } = rig();
+    v.paused = false; v._t = 100;
+    sync.onMessage({ t: 'state', from: 'them', paused: true, pos: 100, rate: 1, seq: 1, s: Date.now() });
+    check('adopting a remote pause pauses the element', () => assert.equal(v.paused, true));
+    check('adopting a remote pause does not echo a frame', () => assert.deepEqual(room.said('state'), []));
+
+    sync.onMessage({ t: 'state', from: 'them', paused: true, pos: 900, rate: 1, seq: 2, s: Date.now() });
+    check('adopting a remote seek moves the playhead', () => assert.equal(v.currentTime, 900));
+    check('adopting a remote seek does not echo a frame', () => assert.deepEqual(room.said('state'), []));
+    sync.stop();
+  }
+
+  // A real person pressing pause still has to reach the room, or the fix has
+  // simply broken the feature.
+  {
+    const { v, room, sync } = rig();
+    v.paused = false; v._t = 42;
+    v.pause();
+    check('a person pressing pause does reach the room', () => assert.equal(room.said('state').length, 1));
+    check('the frame carries the real position', () => assert.equal(room.said('state')[0].pos, 42));
+    check('the frame says paused', () => assert.equal(room.said('state')[0].paused, true));
+    sync.stop();
+  }
+
+  // The drift correction writes playbackRate every tick. Each write used to
+  // become a state frame, so a member that was merely 200ms behind re-anchored
+  // the whole room twice a second.
+  {
+    const { v, room, sync } = rig();
+    v.paused = false; v._t = 0;
+    // 1s behind: inside the nudge window (80ms…2500ms), so it is absorbed by
+    // speeding up rather than by a seek.
+    sync.state = { paused: false, pos: 1, rate: 1, at: Date.now(), from: 'them' };
+    sync._correct();
+    check('a member that is behind speeds up', () => assert.ok(v.playbackRate > 1));
+    check('a drift nudge puts nothing on the wire', () => assert.deepEqual(room.said('state'), []));
+    sync.stop();
+  }
+
+  // A speed the viewer actually chose is a different thing and must be shared.
+  {
+    const { room, sync } = rig();
+    sync.setRate(1.5);
+    check('a speed the viewer picked is broadcast', () => assert.equal(room.said('state')[0]?.rate, 1.5));
+    sync.stop();
+  }
+
+  // Waiting for a straggler is right. Waiting forever is the deadlock that
+  // froze the host with no explanation on screen.
+  {
+    const { v, room, sync } = rig({ host: true });
+    v.paused = false;
+    sync.onMessage({ t: 'wait', from: 'slowpoke', waiting: true, waiters: ['slowpoke'] });
+    check('the room holds for a buffering member', () => assert.equal(v.paused, true));
+    check('the hold is visible', () => assert.equal(sync.waiting, true));
+
+    const real = Date.now;
+    try {
+      Date.now = () => real() + 21_000;      // past HOLD_MAX_MS
+      sync._correct();
+      check('a straggler that never arrives stops holding the room',
+        () => assert.equal(sync.waiting, false));
+      // …and a repeat of the stale waiter list does not re-freeze it.
+      sync.onMessage({ t: 'wait', from: 'slowpoke', waiting: true, waiters: ['slowpoke'] });
+      check('the given-up member cannot re-hold the room', () => assert.equal(sync.waiting, false));
+    } finally { Date.now = real; }
+
+    sync.onMessage({ t: 'wait', from: 'slowpoke', waiting: false, waiters: [] });
+    sync.onMessage({ t: 'wait', from: 'slowpoke', waiting: true, waiters: ['slowpoke'] });
+    check('a member that recovers is waited for again', () => assert.equal(sync.waiting, true));
+    sync.stop();
+  }
+
+  // The descriptor half: what the room is watching, kept apart from where it is.
+  {
+    const { room, sync } = rig({ host: true });
+    sync.shareMedia({ href: '/play.html?url=x', want: { id: '9', title: '片子' } });
+    check('the host can say what it is watching', () => assert.equal(room.said('media')[0].want.id, '9'));
+    sync.onMessage({ t: 'media', from: 'them', href: '/play.html?url=y', want: { id: '12', title: '别的' } });
+    check('a member learns what the room switched to', () => assert.equal(sync.media.want.id, '12'));
+    check('the media frame does not disturb the playhead', () => assert.equal(sync.state, null));
+    sync.stop();
+  }
+}
+
 // --- what the viewer is allowed to paste ------------------------------------
 // A relay hands out an https:// address (Cloudflare prints one, a tunnel prints
 // one), and people paste what they were given. Every shape below is something
