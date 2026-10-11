@@ -197,10 +197,11 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
 - 配额感知的缓冲,自动驱逐已播放过的媒体
 - 轨道压缩(`ContentEncodings`):zlib 与 header stripping
 - 字幕:带内嵌字体的特效 ASS、PGS、内嵌文本轨(MKV 的 SRT / mp4 的 tx3g·wvtt),
-  以及 Emby 外挂字幕 —— **一切直传**:外挂文件按原格式取原始字节
-  (DeliveryUrl / 同格式路由),绝不要求服务器转换。ASS 整脚本交给 libass
-  (特效保留,`[Fonts]` 内嵌子集字体直接生效);SRT 在浏览器内存里转 VTT
-  交给 `<track>`;VTT 原样挂载。内嵌字幕全部本地解复用,零服务器参与
+  以及 Emby 外挂字幕 —— **一切直传,地址全部来自服务器**:视频用 MediaSource
+  自报的 `DirectStreamUrl`,外挂字幕用字幕流自报的 `DeliveryUrl`,客户端不再
+  拼接任何媒体 URL。外挂 ASS 整脚本交给 libass(特效保留,`[Fonts]` 内嵌
+  子集字体直接生效);SRT 原文件取回后在浏览器内存转 VTT 交给 `<track>`;
+  VTT 原样挂载;内嵌字幕全部本地解复用,零服务器参与
 - 弹幕:B 站 XML 与弹弹play JSON 两种格式,canvas 渲染,按条目记住(设置进
   localStorage、弹幕本体进 IndexedDB;见下面折叠的**弹幕**一节)
 - **一起看**:房间同步播放进度、文字聊天、浏览器之间直连的实时语音。中转自己部署,
@@ -573,9 +574,9 @@ mp4 的 tx3g/wvtt 一起送进浏览器自己的 `<track>` 渲染器——不自
 | `MediaStreams` | 完整轨道表 | `[]`(首播才 ffprobe) | 前置选择器一片空白,像是条目坏了 |
 
 识别用 `isRemoteSource()`(`Protocol === 'Http'` / `IsRemote` / URL 形状的 `Path`)。
-容器后缀改由 `containerExt()` 推断:`strm`、`m3u8` 这些不是容器,退而取 `.strm` 里
-那个 URL 自己的扩展名,再退就什么都不拼、交给 Emby 自己决定。总长度则从
-`_followRedirect()` 那个本来就要发的无 Range GET 上顺手取 `Content-Length` ——
+取流地址一律用 PlaybackInfo 里服务器自报的 `DirectStreamUrl` —— 客户端不再
+自己拼路由(旧版按容器猜后缀的 `containerExt()` 已随"拼接"一并移除)。总长度
+则从 `_followRedirect()` 那个本来就要发的无 Range GET 上顺手取 `Content-Length` ——
 那是唯一一个 `Content-Length` 就等于整个文件的响应。
 
 **播放器因此长出了第二条腿。** `Player.load()` 先走重封装,以下失败改走

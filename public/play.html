@@ -230,7 +230,7 @@ import { Player } from '../src/player.js';
 import { Subtitles, attachSrt, attachVtt } from '../src/subs/index.js';
 import { AssOverlay } from '../src/subs/ass.js';
 import { VolumeStage } from '../src/audio/gain.js';
-import { EmbyClient, reline, subtitleNativeFormat } from '../src/emby/client.js';
+import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
 import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
 import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
@@ -330,7 +330,9 @@ let line = EM?.server || '';
 // deployment, not of one film.
 const PREFER_KEY = 'linweb:preferDirect';
 let preferDirect = localStorage.getItem(PREFER_KEY) !== '0';
-const serverSource = () => (WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url);
+// Null-safe: a source the server gave no DirectStreamUrl for leaves url null,
+// and only the .strm direct candidate can still carry the film.
+const serverSource = () => WANT.url ? (WANT.size ? { url: WANT.url, size: WANT.size } : WANT.url) : null;
 const sources = () => (preferDirect && WANT.direct ? [WANT.direct, serverSource()] : [serverSource()]);
 
 async function load(input) {
@@ -793,9 +795,11 @@ async function externalEntries() {
     index: s.Index,               // Emby's stream index, for dedup against 'url'
     label: s.DisplayTitle || s.Title || s.Language || `外挂字幕 ${i + 1}`,
     language: s.Language || 'und',
-    url: EM.subtitleUrl(WANT.id, { Id: WANT.src }, s, subtitleNativeFormat(s)),
+    // The server's own delivery address; null when it declared none, and such
+    // a stream is then simply not offered (no client-built path exists).
+    url: EM.deliveryUrl(s),
     kind: /ass/i.test(s.Codec || '') ? 'ass' : 'text',
-  }));
+  })).filter(e => e.url);
 }
 
 /** Tear down whichever external renderer is up, and say it is gone. */

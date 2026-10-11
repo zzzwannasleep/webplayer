@@ -665,7 +665,7 @@
 // `directUrl` is aliased: this page already has a function of that name for the
 // right-click menu, which resolves the EMBY stream URL. The imported one is a
 // different thing entirely -- the URL inside a .strm.
-import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery, subtitleNativeFormat, isRemoteSource, directUrl as strmTargetUrl } from '../src/emby/client.js';
+import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery, isRemoteSource, directUrl as strmTargetUrl } from '../src/emby/client.js';
 
 const $ = s => document.querySelector(s);
 const store = { get(k,d){try{const v=localStorage.getItem('linweb:'+k);return v==null?d:JSON.parse(v);}catch{return d;}}, set(k,v){try{localStorage.setItem('linweb:'+k,JSON.stringify(v));}catch{}} };
@@ -1035,20 +1035,24 @@ async function play(item, choice, fromStart){
     // honour the chosen version (MediaSource) if the user picked one
     let source = pb.source;
     if (choice && choice.ver != null && pb.sources?.[choice.ver]) source = pb.sources[choice.ver];
-    // Hand the player the raw Emby /Videos/stream URL. It 302-redirects to a CDN
-    // on another origin; HttpSource resolves that redirect itself at fetch-time (a
-    // simple no-Range GET it is allowed to follow), so we must NOT pre-resolve it
-    // here. Pre-resolving before this full page navigation raced the CDN link's
-    // TTL, and when it failed it silently handed play.html an un-followable 302 --
-    // the "CORS on playback" bug. Stable URL in, fresh resolve at the fetch.
-    const url = EM.streamUrl(item.Id, source);
+    // Hand the player the server's OWN delivery URL (DirectStreamUrl). It 302-
+    // redirects to a CDN on another origin; HttpSource resolves that redirect
+    // itself at fetch-time (a simple no-Range GET it is allowed to follow), so
+    // we must NOT pre-resolve it here. Pre-resolving before this full page
+    // navigation raced the CDN link's TTL, and when it failed it silently handed
+    // play.html an un-followable 302 -- the "CORS on playback" bug. Stable URL
+    // in, fresh resolve at the fetch.
+    const url = EM.sourceUrl(source);
+    if (!url && !strmTargetUrl(source))
+      throw new Error('服务器未返回该媒体源的播放地址（DirectStreamUrl 缺失）');
     const title = item.Type==='Episode' ? `${item.SeriesName||''} S${item.ParentIndexNumber||1}E${item.IndexNumber||1} · ${item.Name}` : item.Name;
     const startTicks = fromStart ? 0 : (item.UserData?.PlaybackPositionTicks || 0);
     // Hand off to the dedicated Emby player (play.html). It owns the session
     // lifecycle (start/progress/stopped) so resume works both ways, and it reads
     // the chosen audio + subtitle below so the detail-page picks are honoured --
     // the generic index.html player knew nothing about either.
-    const q = new URLSearchParams({ url, title, id: item.Id });
+    const q = new URLSearchParams({ title, id: item.Id });
+    if (url) q.set('url', url);
     // For a .strm item, the URL inside it travels alongside the Emby one as a
     // CANDIDATE -- play.html tries it first so the bytes need not pass through
     // the server at all. Deliberately un-probed here: the comment above is the
@@ -1090,16 +1094,20 @@ async function play(item, choice, fromStart){
         // to extract or convert anything.
         q.set('sub', subsList.filter(s=>!s.IsExternal).indexOf(chosenSub));
       } else if (how === 'ext-ass' || how === 'ext-text') {
-        // External sidecar file: fetch the ORIGINAL bytes in the format the
-        // file already is (DeliveryUrl when the server declares one, else the
-        // same-format route) -- the server is never asked to convert anything.
-        // subkind tells the player which renderer to build; subidx lets it
-        // dedupe this entry against the item's own external list.
-        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub, subtitleNativeFormat(chosenSub)));
-        q.set('subkind', how === 'ext-ass' ? 'ass' : 'text');
-        q.set('subidx', chosenSub.Index);
+        // External sidecar file: the server's OWN delivery URL (DeliveryUrl,
+        // DeliveryMethod: External) -- the original file, never a conversion,
+        // never a client-built path. Without a server-declared address the
+        // stream is not fetchable and is reported, not guessed at.
+        const subUrl = EM.deliveryUrl(chosenSub);
+        if (subUrl) {
+          q.set('suburl', subUrl);
+          q.set('subkind', how === 'ext-ass' ? 'ass' : 'text');
+          q.set('subidx', chosenSub.Index);
+        } else {
+          q.set('subwarn', `${chosenSub.DisplayTitle || chosenSub.Language || '字幕'} · 服务器未提供取用地址`);
+        }
       } else {
-        q.set('subwarn', chosenSub.DisplayTitle || '图形字幕');   // bitmap sub: no renderer
+        q.set('subwarn', `${chosenSub.DisplayTitle || '字幕'} · 图形格式无渲染器`);   // bitmap sub
       }
       if (chosenSub.Language) q.set('sublang', chosenSub.Language);
       q.set('sublabel', chosenSub.DisplayTitle || chosenSub.Language || '字幕');
@@ -1312,10 +1320,13 @@ async function infoDlg(it){
   $('#dlgBox').querySelector('[data-close]').onclick = closeDlg;
 }
 
-// The direct stream URL, resolved the same way playback does.
+// The delivery URL, resolved the same way playback does: whatever the server
+// declared, never a client-built path.
 async function directUrl(it){
   const pb = await EM.playbackInfo(it.Id);
-  return EM.streamUrl(it.Id, pb.source);
+  const url = EM.sourceUrl(pb.source);
+  if (!url) throw new Error('服务器未返回播放地址（DirectStreamUrl 缺失）');
+  return url;
 }
 async function copyDirect(it){
   const url = await act(directUrl(it));

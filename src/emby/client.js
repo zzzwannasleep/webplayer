@@ -139,20 +139,6 @@ export const isRemoteSource = s =>
           || /^(https?|rtsp|rtmp|mms):\/\//i.test(s.Path || '')
           || /\.strm$/i.test(s.Path || ''));
 
-// The extension Emby's /Videos/{id}/stream path ends with. Emby keys the served
-// container off it, so "strm" -- which is not a container, it is a pointer file
-// -- must never be sent. Fall back to the extension of the URL inside the .strm,
-// which IS the real container, and to nothing at all when even that is unknown
-// (Emby then picks, and the native <video> leg covers whatever comes out).
-const BAD_CONTAINER = /^(strm|m3u|m3u8|)$/i;
-function containerExt(source) {
-  const c = (source?.Container || '').split(',')[0].trim();
-  if (c && !BAD_CONTAINER.test(c)) return '.' + c;
-  const path = (source?.Path || '').split(/[?#]/)[0];
-  const ext = (path.match(/\.([a-z0-9]{2,5})$/i)?.[1] || '').toLowerCase();
-  return ext && !BAD_CONTAINER.test(ext) ? '.' + ext : '';
-}
-
 export class EmbyClient {
   // `home` is the address the account belongs to and the key everything is
   // remembered under; `server` is the domain actually being talked to. They
@@ -403,8 +389,9 @@ export class EmbyClient {
 
   // ---- playback ------------------------------------------------------------
   // Ask the server how it will serve this item; with the empty-transcode profile
-  // above it can only answer with a direct source. Returns { source, url,
-  // playSessionId } ready to hand to the player.
+  // above it can only answer with a direct source. Returns { source, sources,
+  // playSessionId } — the DELIVERY URL is taken from the source itself (see
+  // sourceUrl), never constructed here.
   async playbackInfo(itemId) {
     const data = await this._post(`/Items/${itemId}/PlaybackInfo`, {
       UserId: this.userId, DeviceProfile: DIRECT_PROFILE, MaxStreamingBitrate: 400_000_000,
@@ -412,35 +399,37 @@ export class EmbyClient {
     }, { UserId: this.userId });
     const source = data?.MediaSources?.[0];
     if (!source) throw new Error('该条目没有可用的媒体源');
-    return { source, sources: data.MediaSources, playSessionId: data.PlaySessionId, url: this.streamUrl(itemId, source) };
+    return { source, sources: data.MediaSources, playSessionId: data.PlaySessionId };
   }
-  // The untouched original file. Static=true guarantees no server-side remux.
-  streamUrl(itemId, source) {
-    const p = new URLSearchParams({ Static: 'true', mediaSourceId: source?.Id || itemId });
-    if (source?.ETag) p.set('Tag', source.ETag);
-    if (this.token) p.set('api_key', this.token);
-    return `${this.server}/Videos/${itemId}/stream${containerExt(source)}?${p}`;
+  // The video's delivery URL is whatever the server declared for this source
+  // (DirectStreamUrl). Verified on a live server to serve the ORIGINAL file
+  // with full Range support — byte-for-byte the same stream the old hand-built
+  // /Videos/{id}/stream?Static=true URL returned. Client-side URL construction
+  // is gone on purpose: different server implementations key their routes
+  // differently (measured: one keys /Subtitles by an internal file id), and the
+  // server's own address is the only one that is correct by construction.
+  // Returns null when the server declared nothing — callers surface that as a
+  // "服务器未返回播放地址" error rather than guessing a path.
+  sourceUrl(source) {
+    const raw = source?.DirectStreamUrl;
+    if (!raw) return null;
+    try {
+      const u = new URL(raw, this.server);
+      if (this.token) u.searchParams.set('api_key', this.token);   // re-key to the live session
+      return u.toString();
+    } catch { return raw; }
   }
-
-  // Resolve the fetch URL for a subtitle's ORIGINAL bytes. Never asks for a
-  // conversion: an external stream is fetched in the format it already is.
-  // An EXTERNAL stream on a well-behaved server carries DeliveryUrl +
-  // DeliveryMethod: "External" in its PlaybackInfo MediaStreams — that is the
-  // server's own, authoritative address for the sidecar file, and on Emby-like
-  // reimplementations it is the ONLY address that works (measured on a live
-  // Gin-based server where the generic /Subtitles route keys by an internal
-  // file id and 404s for anything else). Prefer it whenever present.
-  subtitleUrl(itemId, source, stream, format = subtitleNativeFormat(stream)) {
-    if (stream?.DeliveryUrl) {
-      let u;
-      try { u = new URL(stream.DeliveryUrl, this.server); }
-      catch { return stream.DeliveryUrl; }
+  // Same principle for a sidecar subtitle file: the stream's own DeliveryUrl
+  // (DeliveryMethod: External). Null when the server declared nothing — that
+  // stream is then simply not fetchable and is not offered.
+  deliveryUrl(stream) {
+    const raw = stream?.DeliveryUrl;
+    if (!raw) return null;
+    try {
+      const u = new URL(raw, this.server);
       if (this.token) u.searchParams.set('api_key', this.token);
       return u.toString();
-    }
-    const p = new URLSearchParams();
-    if (this.token) p.set('api_key', this.token);
-    return `${this.server}/Videos/${itemId}/${source?.Id || itemId}/Subtitles/${stream.Index}/Stream.${format}?${p}`;
+    } catch { return raw; }
   }
 
   // ---- item actions: what Emby's own right-click menu offers ---------------
@@ -568,13 +557,8 @@ export function subtitleDelivery(stream) {
   if (stream?.IsExternal && EXTERNAL_TEXT.has(codec)) return 'ext-text';
   return 'unsupported';
 }
-// The format to request for a stream when fetching its ORIGINAL bytes: the
-// same format the file already is. subrip files are requested as .srt (two
-// names, one format); everything else maps 1:1.
-export function subtitleNativeFormat(stream) {
-  const codec = (stream?.Codec || '').toLowerCase();
-  return codec === 'subrip' ? 'srt' : (EXTERNAL_TEXT.has(codec) || EXTERNAL_LIBASS.has(codec) ? codec : 'srt');
-}
+// The format the file already is — used only to pick a RENDERER (libass vs
+// <track>), never to build a request URL: delivery URLs come from the server.
 
 export const ticksToSec = t => (t || 0) / 1e7;
 export const fmtRuntime = ticks => {

@@ -78,27 +78,33 @@ localStorage.setItem('linweb:servers', JSON.stringify([
   { url:'http://localhost:${PORT}', line:'http://localhost:${PORT}', token:'T', userId:'U1', userName:'tester' },
   { url:'http://other.test', token:null, userName:'someone' } ]));
 window.__calls = [];
+// A server-shaped item: the delivery addresses are DECLARED by the server
+// (DirectStreamUrl on the source, DeliveryUrl on the external sub) — the
+// client never builds a path, so the stub must not rely on one either.
 const item = (Id, Name, extra) => Object.assign({ Id, Name, Type:'Movie', RunTimeTicks:36000000000,
   ImageTags:{}, UserData:{ PlaybackPositionTicks: 100, LastPlayedDate:'2026-07-25T00:00:00Z' },
-  MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
-    { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
-    { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' }] }] }, extra);
+  MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, DirectStreamUrl:'/play/video/01' + Id + '?api_key=STALE',
+    MediaStreams:[
+      { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
+      { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' }] }] }, extra);
 // R1 carries an EXTERNAL (sidecar) ass subtitle: the regression target of the
-// play-handoff assertions below.
+// play-handoff assertions below. DeliveryUrl points at the real bytes route.
 const extSubItem = extra => item('R1', '继续看的片', Object.assign({
-  MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
-    { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
-    { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
-    { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS' }] }] }, extra));
+  MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, DirectStreamUrl:'/play/video/01R1?api_key=STALE',
+    MediaStreams:[
+      { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
+      { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
+      { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS',
+        DeliveryUrl:'/play/subtitle/01ASSET-R1?api_key=STALE', DeliveryMethod:'External' }] }] }, extra));
 window.__fail401 = null;      // set by the test to expire the session mid-browse
 const __realFetch = window.fetch.bind(window);
 window.fetch = async (u, opt) => {
   const url = String(u); window.__calls.push(url);
   const p = new URL(url); const q = p.searchParams; let body = {};
-  // The video stream itself: hand the player REAL playable bytes (a small MP4
-  // served by the dev server) instead of JSON, so loadAny succeeds, render()
-  // runs, and the external-subtitle seeding below actually executes.
-  if (/\\/Videos\\/[^/]+\\/stream/.test(p.pathname)) return __realFetch('/samples/ext-sub-test.mp4', opt);
+  // The server's declared video route: hand the player REAL playable bytes (a
+  // small MP4 served by the dev server) instead of JSON, so loadAny succeeds,
+  // render() runs, and the external-subtitle seeding below actually executes.
+  if (p.pathname.startsWith('/play/video/')) return __realFetch('/samples/ext-sub-test.mp4', opt);
   if (window.__fail401 && p.pathname.includes(window.__fail401))
     return { ok:false, status:401, url, json: async () => ({}), text: async () => '' };
   // Eight libraries on purpose, two of them collection types the home page used
@@ -121,18 +127,20 @@ window.fetch = async (u, opt) => {
   }
   else if (p.pathname.includes('/PlaybackInfo')) body = {
     PlaySessionId:'ps1',
-    MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
-      { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
-      { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
-      { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS' }] }] };
+    MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, DirectStreamUrl:'/play/video/01R1?api_key=STALE',
+      MediaStreams:[
+        { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
+        { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
+        { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS',
+          DeliveryUrl:'/play/subtitle/01ASSET-R1?api_key=STALE', DeliveryMethod:'External' }] }] };
   else if (p.pathname.endsWith('/Items')) body = { Items:[ extSubItem(), item('R2','另一部') ], TotalRecordCount:2 };
   else if (p.pathname.includes('/Genres')) body = { Items:[] };
   else body = { Items:[] };
-  // The subtitle extraction route: a minimal but structurally complete ASS the
-  // in-player JASSUB path can parse (the script-info guard checks for it).
+  // The server's declared subtitle route: a minimal but structurally complete
+  // ASS the in-player JASSUB path can parse (the script-info guard checks it).
   const subText = '[Script Info]\\nTitle: t\\n\\n[V4+ Styles]\\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\\nStyle: Main,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,30,1\\n\\n[Events]\\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\\nDialogue: 0,0:00:01.00,0:00:05.00,Main,,0,0,0,,测试字幕一行\\n';
   return { ok:true, status:200, url, json: async () => body,
-           text: async () => p.pathname.includes('/Subtitles/') ? subText : '' };
+           text: async () => p.pathname.startsWith('/play/subtitle/') ? subText : '' };
 };`;
 
 await send('Page.enable'); await send('Runtime.enable');
@@ -288,8 +296,8 @@ for (let i = 0; i < 30 && !onPlayer; i++) {
 }
 check('play handed off to play.html', !!onPlayer);
 const handoff = await evalJS(`Object.fromEntries([...new URLSearchParams(location.search)].slice(0, 40))`);
-check('external ASS travels as the ORIGINAL script (Stream.ass + subkind=ass)',
-  /Stream\.ass/.test(handoff.suburl || '') && handoff.subkind === 'ass',
+check('external ASS travels by the server-declared DeliveryUrl (subkind=ass)',
+  /\/play\/subtitle\//.test(handoff.suburl || '') && handoff.subkind === 'ass',
   JSON.stringify({ suburl: handoff.suburl, subkind: handoff.subkind, subidx: handoff.subidx }));
 // The <video> has no real bytes behind it in the stub, so drive the picker the
 // way a viewer would and assert on the DOM + log instead of pixels.

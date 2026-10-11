@@ -1,9 +1,9 @@
-// The Emby client is browser-facing (fetch, localStorage), but its two pure
+// The Emby client is browser-facing (fetch, localStorage), but its pure
 // routing helpers decide correctness of the whole play handoff, so they get a
-// node check. subtitleDelivery picks the render path; subtitleUrl builds the
-// Emby extraction URL for the text path.
+// node check. subtitleDelivery picks the render path; sourceUrl / deliveryUrl
+// resolve the server-DECLARED delivery addresses (never client-built paths).
 import assert from 'node:assert/strict';
-import { EmbyClient, subtitleDelivery, subtitleNativeFormat, reline, servers, serverIcons, isRemoteSource, directUrl } from '../src/emby/client.js';
+import { EmbyClient, subtitleDelivery, reline, servers, serverIcons, isRemoteSource, directUrl } from '../src/emby/client.js';
 
 // --- subtitleDelivery: which path a chosen subtitle stream takes ------------
 assert.equal(subtitleDelivery({ Codec: 'ass' }), 'client', 'embedded ASS renders in-browser');
@@ -29,42 +29,39 @@ assert.equal(subtitleDelivery({ Codec: 'srt', IsExternal: true }), 'ext-text', '
 assert.equal(subtitleDelivery({ Codec: 'subrip', IsExternal: true }), 'ext-text', 'external SRT, other spelling');
 assert.equal(subtitleDelivery({ Codec: 'vtt', IsExternal: true }), 'ext-text', 'external VTT — original bytes straight to <track>');
 assert.equal(subtitleDelivery({ Codec: 'mov_text', IsExternal: true }), 'unsupported', 'external mp4-timed text is not a fetchable sidecar format');
-assert.equal(subtitleNativeFormat({ Codec: 'subrip' }), 'srt', 'subrip is requested as .srt (same format, other name)');
-assert.equal(subtitleNativeFormat({ Codec: 'srt' }), 'srt', 'srt stays .srt');
-assert.equal(subtitleNativeFormat({ Codec: 'ass' }), 'ass', 'ass is requested as .ass — never converted');
-assert.equal(subtitleNativeFormat({ Codec: 'vtt' }), 'vtt', 'vtt is requested as .vtt');
 assert.equal(subtitleDelivery({ Codec: 'dvb_teletext' }), 'unsupported',
   'an embedded format with no local renderer is NOT sent to the server for conversion — direct-pass everything');
 assert.equal(subtitleDelivery({ Codec: 'pgssub', IsExternal: true }), 'unsupported',
   'external bitmap sub has no clean path');
 assert.equal(subtitleDelivery({ Codec: 'vobsub', IsExternal: true }), 'unsupported', 'external VobSub unsupported');
 
-// --- subtitleUrl: Emby subtitle extraction endpoint -------------------------
+// --- sourceUrl / deliveryUrl: the server's OWN addresses, never built --------
+// The whole URL-construction layer is gone: different server implementations
+// key their routes differently (measured on a live Gin-based server where the
+// generic /Subtitles route keys by an internal file id), and the server's own
+// declared address is the only one correct by construction.
 const c = new EmbyClient('https://emby.example/');   // trailing slash trimmed
 c.token = 'TKN';
-const u = new URL(c.subtitleUrl('item42', { Id: 'srcA' }, { Index: 3 }));
-assert.equal(u.origin + u.pathname, 'https://emby.example/Videos/item42/srcA/Subtitles/3/Stream.srt');
-assert.equal(u.searchParams.get('api_key'), 'TKN', 'token carried for a plain GET');
 
-// A server-declared DeliveryUrl (DeliveryMethod: External) is authoritative:
-// Emby-like reimplementations key their generic /Subtitles route by an internal
-// file id, and the only working address is the one the server itself hands out.
-const dv = new URL(c.subtitleUrl('item42', { Id: 'srcA' },
-  { Index: 1, DeliveryUrl: '/play/subtitle/01ASSET?api_key=OLD', DeliveryMethod: 'External' }, 'ass'));
+// DirectStreamUrl is authoritative for the video; the api_key is re-keyed to
+// the LIVE session (a stale one baked in by the server must not ride along).
+const sv = new URL(c.sourceUrl({ DirectStreamUrl: '/play/video/01FILE?api_key=OLD' }));
+assert.equal(sv.origin + sv.pathname, 'https://emby.example/play/video/01FILE',
+  'video uses the server-declared DirectStreamUrl');
+assert.equal(sv.searchParams.get('api_key'), 'TKN', 'video URL re-keyed to the live session token');
+assert.equal(c.sourceUrl({}), null, 'no DirectStreamUrl -> null (callers report, not guess)');
+assert.equal(c.sourceUrl(null), null, 'no source -> null');
+
+// DeliveryUrl is authoritative for a sidecar subtitle file.
+const dv = new URL(c.deliveryUrl({ Index: 1, DeliveryUrl: '/play/subtitle/01ASSET?api_key=OLD', DeliveryMethod: 'External' }));
 assert.equal(dv.origin + dv.pathname, 'https://emby.example/play/subtitle/01ASSET',
-  'DeliveryUrl wins over the generic extraction route');
-assert.equal(dv.searchParams.get('api_key'), 'TKN', 'DeliveryUrl is re-keyed to the live session token');
-// A relative DeliveryUrl resolves against the server origin, not the page.
-const rel = new URL(c.subtitleUrl('i', { Id: 's' }, { Index: 0, DeliveryUrl: '/play/subtitle/x' }));
+  'subtitle uses the server-declared DeliveryUrl');
+assert.equal(dv.searchParams.get('api_key'), 'TKN', 'DeliveryUrl re-keyed to the live session token');
+// A relative path resolves against the SERVER origin, not the page.
+const rel = new URL(c.deliveryUrl({ Index: 0, DeliveryUrl: '/play/subtitle/x' }));
 assert.equal(rel.origin + rel.pathname, 'https://emby.example/play/subtitle/x', 'relative DeliveryUrl resolved against the server');
-
-const v = new URL(c.subtitleUrl('item42', null, { Index: 0 }, 'vtt'));
-assert.ok(v.pathname.endsWith('/Subtitles/0/Stream.vtt'), 'format override honoured');
-assert.ok(v.pathname.includes('/Videos/item42/item42/'), 'falls back to itemId when source has no Id');
-
-// The external-ASS path asks for the ORIGINAL script, not a conversion.
-const a = new URL(c.subtitleUrl('item42', { Id: 'srcA' }, { Index: 5 }, 'ass'));
-assert.ok(a.pathname.endsWith('/Subtitles/5/Stream.ass'), 'external ASS is fetched verbatim (Stream.ass)');
+assert.equal(c.deliveryUrl({ Index: 2 }), null, 'no DeliveryUrl -> null (stream is not fetchable, not offered)');
+assert.equal(c.deliveryUrl(null), null, 'no stream -> null');
 
 // --- imageUrl: id and tag must be paired (the episode-cover-blank bug) -------
 const idAndTag = url => { const u = new URL(url); return { id: u.pathname.split('/Items/')[1].split('/Images/')[0], tag: u.searchParams.get('tag') }; };
@@ -100,26 +97,14 @@ assert.equal(reline('https://c.example/Videos/9/stream.mkv?x=1', 'https://a.exam
 
 // --- .strm / remote sources -------------------------------------------------
 // Emby resolves the .strm server-side, so the client only ever sees the SHAPE
-// it produces. Two things must hold for those: they are recognised, and the
-// stream URL never ends in ".strm" (not a container -- Emby would be asked to
-// serve a format that does not exist).
+// it produces; the URL inside it (source.Path) is itself server-given and is
+// offered to play.html as the direct-connect CANDIDATE.
 assert.equal(isRemoteSource({ Protocol: 'Http' }), true, 'Protocol=Http is remote');
 assert.equal(isRemoteSource({ IsRemote: true }), true, 'IsRemote flag is remote');
 assert.equal(isRemoteSource({ Path: 'https://s3.example/a.mkv?X-Amz-Signature=x' }), true, 'http path is remote');
 assert.equal(isRemoteSource({ Path: '/media/movies/a.strm' }), true, '.strm path is remote');
 assert.equal(isRemoteSource({ Protocol: 'File', Path: '/media/movies/a.mkv' }), false, 'local file is not remote');
 assert.equal(isRemoteSource(null), false, 'no source is not remote');
-
-const ext = src => new URL(c.streamUrl('it1', src)).pathname.split('/stream')[1];
-assert.equal(ext({ Id: 's', Container: 'mkv' }), '.mkv', 'a real container is still appended');
-assert.equal(ext({ Id: 's', Container: 'strm', Path: 'https://s3.example/movie.mp4?sig=1' }), '.mp4',
-  'Container=strm falls through to the real extension inside the .strm URL');
-assert.equal(ext({ Id: 's', Container: 'strm', Path: 'https://cdn.example/redirect?id=7' }), '',
-  'a 302 jump-board URL has no extension to borrow -> no suffix, let Emby decide');
-assert.equal(ext({ Id: 's' }), '', 'no container and no path -> no suffix');
-assert.equal(ext({ Id: 's', Container: 'mp4,mov' }), '.mp4', 'multi-container takes the first');
-assert.equal(ext({ Id: 's', Container: 'm3u8', Path: 'https://a.example/x.m3u8' }), '',
-  'a playlist is not a container either');
 
 // --- directUrl: the direct-connect candidate --------------------------------
 // Only http(s) is a candidate. Everything else a .strm may legally hold is
