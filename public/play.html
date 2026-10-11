@@ -227,10 +227,10 @@
 
 <script type="module">
 import { Player } from '../src/player.js';
-import { Subtitles, attachSrt } from '../src/subs/index.js';
+import { Subtitles, attachSrt, attachVtt } from '../src/subs/index.js';
 import { AssOverlay } from '../src/subs/ass.js';
 import { VolumeStage } from '../src/audio/gain.js';
-import { EmbyClient, reline } from '../src/emby/client.js';
+import { EmbyClient, reline, subtitleNativeFormat } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
 import { SettingsMenu, menuStyles } from '../src/ui/menu.js';
 import { touchStyles, attachTouch, fullscreen } from '../src/ui/touch.js';
@@ -280,8 +280,9 @@ const WANT = {
   direct: P.get('direct') || '',
   suburl: P.get('suburl'), sublabel: P.get('sublabel') || '字幕',
   // What kind of external subtitle suburl points at: 'ass' means an original
-  // sidecar script (rendered by JASSUB, effects kept); 'text' means the server
-  // is serving SRT. Derived from the file name for a hand-built URL.
+  // sidecar script (rendered by JASSUB, effects kept); 'text' means an original
+  // srt/vtt file (rendered by the browser's own <track>). Derived from the file
+  // name for a hand-built URL.
   subkind: P.get('subkind') || (/\.ass($|\?)/i.test(P.get('suburl') || '') ? 'ass' : 'text'),
   subidx: P.has('subidx') ? Number(P.get('subidx')) : null,
   subwarn: P.get('subwarn'),
@@ -745,7 +746,7 @@ function seedChoice() {
     enableExternal('url');
   } else if (WANT.sub != null) {
     CHOICE.sub = -1;
-    player.log('该源未解出字幕轨，客户端字幕不可用（可让 Emby 以 SRT 提供）', 'warn');
+    player.log('该源未解出字幕轨，客户端字幕不可用', 'warn');
   }
 }
 
@@ -760,14 +761,17 @@ function seedChoice() {
 
 // ---- external (sidecar) subtitles -----------------------------------------
 // A sidecar file is not inside the container, so the demuxer never sees it.
-// Emby knows it (the item's MediaStreams carry IsExternal entries), and its
-// /Subtitles/{index}/Stream.{format} route serves the bytes. Two renderers:
+// Emby knows it (the item's MediaStreams carry IsExternal entries). The player
+// fetches the file's ORIGINAL bytes -- DeliveryUrl when the server declares
+// one, else the same-format /Subtitles route -- and renders locally:
 //
-//   ass/ssa -> the original script, handed to JASSUB whole -- libass keeps the
-//              effects the SRT round trip used to flatten away. Falls back to
-//              the SRT route below if the server refuses the ass format.
-//   others  -> SRT served by Emby, converted to WebVTT, drawn by the browser's
-//              own <track>.
+//   ass/ssa -> handed to JASSUB whole; libass keeps effects + [Fonts] fonts.
+//   srt     -> converted to WebVTT IN THE BROWSER (srtToVtt), drawn by the
+//              browser's own <track>.
+//   vtt     -> already WebVTT, attached to <track> as-is.
+//
+// The server is never asked to convert or extract anything: direct-pass
+// everything.
 //
 // The menu lists ALL external streams of the item (fetched from the item, not
 // just the one emby.html picked), so the viewer can switch mid-film. `key` is
@@ -789,7 +793,7 @@ async function externalEntries() {
     index: s.Index,               // Emby's stream index, for dedup against 'url'
     label: s.DisplayTitle || s.Title || s.Language || `外挂字幕 ${i + 1}`,
     language: s.Language || 'und',
-    url: EM.subtitleUrl(WANT.id, { Id: WANT.src }, s, /ass/i.test(s.Codec || '') ? 'ass' : 'srt'),
+    url: EM.subtitleUrl(WANT.id, { Id: WANT.src }, s, subtitleNativeFormat(s)),
     kind: /ass/i.test(s.Codec || '') ? 'ass' : 'text',
   }));
 }
@@ -819,13 +823,9 @@ async function activateExternal(entry) {
     else await attachExternalText(entry);
     player.log(`字幕已开启（外挂 ${entry.kind === 'ass' ? 'ASS · 特效' : '文本'}）: ${entry.label}`);
   } catch (e) {
-    // An external ASS the server will not serve whole: retry once as SRT, which
-    // flattens the effects but shows the lines -- better than a dead picker.
-    if (entry.kind === 'ass' && !entry._retried) {
-      player.log(`外挂 ASS 加载失败（${e.message}），回退为纯文本`, 'warn');
-      return activateExternal({ ...entry, kind: 'text', _retried: true,
-        label: entry.label, url: String(entry.url).replace(/\.ass(?=(\?|$))/i, '.srt') });
-    }
+    // No format-conversion fallback on purpose: asking the server for a
+    // different format than the file already is would be a conversion request,
+    // and this player is direct-pass everything. What failed is reported as is.
     player.log(`字幕加载失败: ${e.message}`, 'warn');
     closeExternal();
   }
@@ -853,6 +853,12 @@ async function enableExternal(key) {
  * retry, rather than reporting a transient as a broken subtitle. An empty body
  * counts as a failure: it parses to zero cues either way.
  */
+/**
+ * Fetch a subtitle file. Direct-pass, so the body should be the original file;
+ * the retries below exist for TRANSIENT transport failures only (a slow origin,
+ * a token rotated mid-session -- handled by re-keying from the live session).
+ * An empty body is a failure either way: it parses to zero cues.
+ */
 async function fetchSubtitle(url, tries = 4) {
   let last;
   for (let i = 0; i < tries; i++) {
@@ -874,10 +880,10 @@ async function fetchSubtitle(url, tries = 4) {
       // is definitive: the route does not exist for this stream. Retrying it
       // four times just delays the same verdict -- fail fast with the real
       // cause instead of "Failed to fetch" x4.
-      if (r.status === 404) throw Object.assign(new Error('该服务器未开放这条字幕（404）'), { hard404: true });
+      if (r.status === 404) throw Object.assign(new Error('该服务器未提供这条字幕文件（404）'), { hard404: true });
       if (!r.ok) throw new Error('字幕 ' + r.status);
       const text = await r.text();
-      if (!text.trim()) throw new Error('服务器返回了空字幕（仍在提取？）');
+      if (!text.trim()) throw new Error('服务器返回了空字幕');
       if (probe !== url) player.log('字幕以当前会话令牌重新获取成功', 'info');
       return text;
     } catch (e) {
@@ -899,18 +905,23 @@ async function attachExternalAss(entry, alreadyFetched) {
   await extAss.ready;
 }
 
-/** External text subtitle: Emby-served SRT -> VTT -> the browser's <track>. */
+/** External text subtitle: the ORIGINAL file goes straight to <track>. */
 async function attachExternalText(entry) {
-  const srt = await fetchSubtitle(entry.url);
-  // Some Emby builds answer Stream.srt for an external .ass with the ORIGINAL
-  // script (measured: 200, text/x-ssa, same bytes as Stream.ass) instead of a
-  // conversion. Render what was actually served: an ASS-looking body goes to
-  // libass, not into srtToVtt -- which would correctly refuse it ("no cues").
-  if (/^\s*\[Script Info\]/m.test(srt)) {
+  const raw = await fetchSubtitle(entry.url);
+  // The request always asks for the file's own format, but render whatever
+  // actually came back (measured: one server answers an .srt request with the
+  // original .ass bytes) -- the sniff below costs nothing and keeps rendering
+  // honest without ever asking the server to convert.
+  if (/^\s*\[Script Info\]/m.test(raw)) {         // ASS body -> libass
     entry.kind = 'ass';
-    return attachExternalAss(entry, srt);
+    return attachExternalAss(entry, raw);
   }
-  extTrack = attachSrt(video, srt, { label: entry.label, language: entry.language, asDefault: true });
+  if (/^\s*WEBVTT/.test(raw)) {                   // native VTT -> straight to <track>
+    extTrack = attachVtt(video, raw, { label: entry.label, language: entry.language, asDefault: true });
+    return;
+  }
+  // SRT -> WebVTT happens IN THE BROWSER (srtToVtt), never on the server.
+  extTrack = attachSrt(video, raw, { label: entry.label, language: entry.language, asDefault: true });
 }
 
 function gainNote() {
@@ -937,12 +948,9 @@ setInterval(() => { if (menu.open === 'gain') paintMenu(); }, 1000);
 // means.
 function extRows() {
   const rows = [];
-  // subidx present = an EXTERNAL stream (sidecar file) -- always listed.
-  // Absent = the fallback server copy of an EMBEDDED text stream, which only
-  // earns a row when there is no demuxed list to offer the same lines (native
-  // playback): on a live server with subtitle extraction disabled that route
-  // answers a bare nginx 404, and a row that can only fail is noise.
-  if (WANT.suburl && (WANT.subidx != null || info?.native))
+  // suburl is always an EXTERNAL (sidecar) file now: embedded streams never
+  // carry a server URL, because the player never asks the server to extract.
+  if (WANT.suburl)
     rows.push({ value: 'url',
       label: `${WANT.sublabel} · 外挂${WANT.subkind === 'ass' ? ' ASS 特效' : ''}` });
   for (const e of EXT || []) {
@@ -972,7 +980,7 @@ function subtitleGroup() {
       // Say why it is empty. An absent picker and a picker with nothing in it
       // look the same from the outside, and only one of them is a bug.
       : { type: 'note', text: info?.native
-          ? '原生播放通路解不出内嵌字幕轨。可以在 Emby 里选一条字幕，由服务器送过来。'
+          ? '原生播放通路解不出内嵌字幕轨。若该片有外挂字幕文件，会列在这里。'
           : '这个片源没有解出字幕轨。' }],
   };
 }

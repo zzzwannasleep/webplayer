@@ -3,7 +3,7 @@
 // node check. subtitleDelivery picks the render path; subtitleUrl builds the
 // Emby extraction URL for the text path.
 import assert from 'node:assert/strict';
-import { EmbyClient, subtitleDelivery, reline, servers, serverIcons, isRemoteSource, directUrl } from '../src/emby/client.js';
+import { EmbyClient, subtitleDelivery, subtitleNativeFormat, reline, servers, serverIcons, isRemoteSource, directUrl } from '../src/emby/client.js';
 
 // --- subtitleDelivery: which path a chosen subtitle stream takes ------------
 assert.equal(subtitleDelivery({ Codec: 'ass' }), 'client', 'embedded ASS renders in-browser');
@@ -25,10 +25,16 @@ assert.equal(subtitleDelivery({ Codec: 'subrip' }), 'client', 'embedded SRT is d
 assert.equal(subtitleDelivery({ Codec: 'srt' }), 'client', 'embedded SRT (other codec spelling)');
 assert.equal(subtitleDelivery({ Codec: 'mov_text' }), 'client', 'embedded tx3g is demuxed and drawn locally');
 assert.equal(subtitleDelivery({ Codec: 'webvtt' }), 'client', 'embedded WebVTT is demuxed and drawn locally');
-assert.equal(subtitleDelivery({ Codec: 'srt', IsExternal: true }), 'text', 'external SRT — browser <track>');
-assert.equal(subtitleDelivery({ Codec: 'subrip', IsExternal: true }), 'text', 'external SRT, other spelling');
-assert.equal(subtitleDelivery({ Codec: 'dvb_teletext' }), 'text',
-  'an embedded format with no local renderer still falls back to Emby');
+assert.equal(subtitleDelivery({ Codec: 'srt', IsExternal: true }), 'ext-text', 'external SRT — original bytes to browser <track>');
+assert.equal(subtitleDelivery({ Codec: 'subrip', IsExternal: true }), 'ext-text', 'external SRT, other spelling');
+assert.equal(subtitleDelivery({ Codec: 'vtt', IsExternal: true }), 'ext-text', 'external VTT — original bytes straight to <track>');
+assert.equal(subtitleDelivery({ Codec: 'mov_text', IsExternal: true }), 'unsupported', 'external mp4-timed text is not a fetchable sidecar format');
+assert.equal(subtitleNativeFormat({ Codec: 'subrip' }), 'srt', 'subrip is requested as .srt (same format, other name)');
+assert.equal(subtitleNativeFormat({ Codec: 'srt' }), 'srt', 'srt stays .srt');
+assert.equal(subtitleNativeFormat({ Codec: 'ass' }), 'ass', 'ass is requested as .ass — never converted');
+assert.equal(subtitleNativeFormat({ Codec: 'vtt' }), 'vtt', 'vtt is requested as .vtt');
+assert.equal(subtitleDelivery({ Codec: 'dvb_teletext' }), 'unsupported',
+  'an embedded format with no local renderer is NOT sent to the server for conversion — direct-pass everything');
 assert.equal(subtitleDelivery({ Codec: 'pgssub', IsExternal: true }), 'unsupported',
   'external bitmap sub has no clean path');
 assert.equal(subtitleDelivery({ Codec: 'vobsub', IsExternal: true }), 'unsupported', 'external VobSub unsupported');

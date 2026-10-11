@@ -665,7 +665,7 @@
 // `directUrl` is aliased: this page already has a function of that name for the
 // right-click menu, which resolves the EMBY stream URL. The imported one is a
 // different thing entirely -- the URL inside a .strm.
-import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery, isRemoteSource, directUrl as strmTargetUrl } from '../src/emby/client.js';
+import { EmbyClient, servers, serverIcons, fmtRuntime, ticksToSec, progressOf, subtitleDelivery, subtitleNativeFormat, isRemoteSource, directUrl as strmTargetUrl } from '../src/emby/client.js';
 
 const $ = s => document.querySelector(s);
 const store = { get(k,d){try{const v=localStorage.getItem('linweb:'+k);return v==null?d:JSON.parse(v);}catch{return d;}}, set(k,v){try{localStorage.setItem('linweb:'+k,JSON.stringify(v));}catch{}} };
@@ -1085,29 +1085,21 @@ async function play(item, choice, fromStart){
     if (chosenSub) {
       const how = subtitleDelivery(chosenSub);
       if (how === 'client') {
-        // Embedded: draw in-browser. Map to the embedded-only index the player
-        // uses (external subs are not in the container, so exclude them).
+        // Embedded: draw in-browser from demuxed packets. Zero server work --
+        // and no server fallback URL either: the player never asks the server
+        // to extract or convert anything.
         q.set('sub', subsList.filter(s=>!s.IsExternal).indexOf(chosenSub));
-        // ...and, for a text stream, carry the server URL as a fallback. A
-        // source that falls back to native playback has no demuxed subtitle
-        // list at all; without this the player could only say so.
-        if (subtitleDelivery({ ...chosenSub, IsExternal: true }) === 'text')
-          q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
-      } else if (how === 'ext-ass') {
-        // External ass/ssa: served verbatim (Stream.ass), rendered by JASSUB in
-        // the player -- effects kept, not flattened into SRT. subkind tells the
-        // player which renderer to build; subidx lets it dedupe this entry
-        // against the full external list it can fetch from the item itself.
-        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub, 'ass'));
-        q.set('subkind', 'ass');
-        q.set('subidx', chosenSub.Index);
-      } else if (how === 'text') {
-        // external or embedded text sub: let Emby serve SRT into a <track>.
-        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
-        q.set('subkind', 'text');
+      } else if (how === 'ext-ass' || how === 'ext-text') {
+        // External sidecar file: fetch the ORIGINAL bytes in the format the
+        // file already is (DeliveryUrl when the server declares one, else the
+        // same-format route) -- the server is never asked to convert anything.
+        // subkind tells the player which renderer to build; subidx lets it
+        // dedupe this entry against the item's own external list.
+        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub, subtitleNativeFormat(chosenSub)));
+        q.set('subkind', how === 'ext-ass' ? 'ass' : 'text');
         q.set('subidx', chosenSub.Index);
       } else {
-        q.set('subwarn', chosenSub.DisplayTitle || '图形字幕');   // external bitmap: no path
+        q.set('subwarn', chosenSub.DisplayTitle || '图形字幕');   // bitmap sub: no renderer
       }
       if (chosenSub.Language) q.set('sublang', chosenSub.Language);
       q.set('sublabel', chosenSub.DisplayTitle || chosenSub.Language || '字幕');

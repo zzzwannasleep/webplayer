@@ -422,19 +422,15 @@ export class EmbyClient {
     return `${this.server}/Videos/${itemId}/stream${containerExt(source)}?${p}`;
   }
 
-  // Ask the server to extract/convert a subtitle stream. Used for the two cases
-  // the in-browser renderers do NOT cover: an external (sidecar) subtitle, and
-  // an EMBEDDED text subtitle (S_TEXT/UTF8 etc.) — Subtitles only renders
-  // ass/ssa/pgs, so text subs would otherwise silently show nothing.
-  //
+  // Resolve the fetch URL for a subtitle's ORIGINAL bytes. Never asks for a
+  // conversion: an external stream is fetched in the format it already is.
   // An EXTERNAL stream on a well-behaved server carries DeliveryUrl +
   // DeliveryMethod: "External" in its PlaybackInfo MediaStreams — that is the
   // server's own, authoritative address for the sidecar file, and on Emby-like
   // reimplementations it is the ONLY address that works (measured on a live
   // Gin-based server where the generic /Subtitles route keys by an internal
-  // file id and 404s for anything else). Prefer it whenever present; keep the
-  // format argument out of its way — DeliveryUrl serves the original file.
-  subtitleUrl(itemId, source, stream, format = 'srt') {
+  // file id and 404s for anything else). Prefer it whenever present.
+  subtitleUrl(itemId, source, stream, format = subtitleNativeFormat(stream)) {
     if (stream?.DeliveryUrl) {
       let u;
       try { u = new URL(stream.DeliveryUrl, this.server); }
@@ -535,41 +531,49 @@ export class EmbyClient {
 
 // ---- small shared helpers the UI needs -------------------------------------
 
-// Decide how a chosen Emby subtitle stream reaches the screen:
-//   'client'      -> demux from the container, draw in-browser (ass/ssa via
-//                    JASSUB, pgs via libpgs, srt/subrip via the browser's own
-//                    TextTrack). Keeps effects + embedded fonts, no server work.
-//                    Only for EMBEDDED streams.
-//   'ext-ass'     -> an EXTERNAL (sidecar) ass/ssa: Emby serves the original
-//                    script via /Subtitles/{index}/Stream.ass and JASSUB takes a
-//                    whole script as its content, so effects survive. play.html
-//                    falls back to the 'text' path if the server refuses ass.
-//   'text'        -> have Emby serve it as SRT into the browser's <track>. For
-//                    EXTERNAL (sidecar) text subs in other spellings, and as
-//                    the fallback for 'ext-ass'. These are not in the container
-//                    and so cannot be demuxed.
-//   'unsupported' -> an external bitmap sub (external pgs/vobsub); no clean path.
+// Decide how a chosen Emby subtitle stream reaches the screen. ONE principle
+// governs all of it: the server is never asked to convert or extract anything
+// -- the client fetches ORIGINAL bytes and renders them locally.
+//   'client'      -> the stream lives INSIDE the container: demux locally and
+//                    draw in-browser (ass/ssa via JASSUB, pgs via libpgs,
+//                    srt/subrip via the browser's own TextTrack). No server
+//                    work at all.
+//   'ext-ass'     -> EXTERNAL (sidecar) ass/ssa: fetch the original script
+//                    (DeliveryUrl when the server declares one, else the
+//                    same-format Stream.ass route) and hand it to JASSUB
+//                    whole. Effects + embedded [Fonts] survive.
+//   'ext-text'    -> EXTERNAL text sub in another spelling (srt/subrip/vtt):
+//                    fetch the original file in ITS OWN format and let the
+//                    browser's <track> draw it (client-side srt->vtt only).
+//   'unsupported' -> bitmap sub with no local renderer (pgs/vobsub/dvbsub,
+//                    embedded or external). Never burned in, never converted.
 //
-// Embedded SRT used to be routed to 'text' as well, back when there was no
-// in-browser renderer for it. There is one now (src/subs/text.js), and the
-// round trip it replaced was the flaky part: Emby extracts an embedded text
-// stream with ffmpeg on first request, so that URL intermittently answers 404 /
-// 500 / an empty body, which surfaced as "字幕加载失败" on a random subset of
-// plays. Demuxing it locally has no such window.
+// What was removed and why: external text subs used to be served by Emby's
+// conversion endpoint (Stream.srt regardless of the source format), and an
+// embedded text stream carried a server-extraction fallback for the native
+// leg. Both asked the server to run ffmpeg -- against the zero-transcoding
+// principle. The player now only ever fetches a subtitle in the format it
+// already is.
 // Matched whole, not by substring: "dvb_teletext" contains "text" but has no
 // local renderer, and routing it here would have shown nothing at all.
 const CLIENT_TEXT = new Set(['ass', 'ssa', 'srt', 'subrip', 'mov_text', 'tx3g', 'webvtt', 'vtt']);
-// An EXTERNAL (sidecar) ass/ssa file now renders in-browser too: Emby serves the
-// original script via /Subtitles/{index}/Stream.ass and JASSUB takes a whole
-// script as its content -- so the effects survive instead of being flattened
-// into SRT. Text in any other spelling keeps the SRT round trip.
 const EXTERNAL_LIBASS = new Set(['ass', 'ssa']);
+// Formats the browser's <track> can take (after the client-side srt->vtt pass).
+const EXTERNAL_TEXT = new Set(['srt', 'subrip', 'vtt', 'webvtt']);
 export function subtitleDelivery(stream) {
   const codec = (stream?.Codec || '').toLowerCase();
   const bitmap = /pgs|vobsub|dvbsub|dvb_subtitle|dvd_subtitle/.test(codec);
   if (!stream?.IsExternal && (bitmap || CLIENT_TEXT.has(codec))) return 'client';
-  if (!bitmap) return stream?.IsExternal && EXTERNAL_LIBASS.has(codec) ? 'ext-ass' : 'text';
+  if (stream?.IsExternal && EXTERNAL_LIBASS.has(codec)) return 'ext-ass';
+  if (stream?.IsExternal && EXTERNAL_TEXT.has(codec)) return 'ext-text';
   return 'unsupported';
+}
+// The format to request for a stream when fetching its ORIGINAL bytes: the
+// same format the file already is. subrip files are requested as .srt (two
+// names, one format); everything else maps 1:1.
+export function subtitleNativeFormat(stream) {
+  const codec = (stream?.Codec || '').toLowerCase();
+  return codec === 'subrip' ? 'srt' : (EXTERNAL_TEXT.has(codec) || EXTERNAL_LIBASS.has(codec) ? codec : 'srt');
 }
 
 export const ticksToSec = t => (t || 0) / 1e7;

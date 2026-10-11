@@ -78,7 +78,20 @@ export function srtToVtt(srt) {
  * Returns the <track> element so the caller can remove it again.
  */
 export function attachSrt(video, srt, { label = 'SRT', language = 'und', asDefault = true } = {}) {
-  const url = URL.createObjectURL(new Blob([srtToVtt(srt)], { type: 'text/vtt' }));
+  return attachTrack(video, srtToVtt(srt), { label, language, asDefault });
+}
+
+/**
+ * Attach an already-WebVTT document directly -- no conversion, the file's own
+ * bytes. The direct-pass counterpart of attachSrt for .vtt sidecar files.
+ */
+export function attachVtt(video, vtt, { label = 'VTT', language = 'und', asDefault = true } = {}) {
+  return attachTrack(video, vtt, { label, language, asDefault });
+}
+
+/** Shared plumbing: blob URL + <track> element + the mode dance. */
+function attachTrack(video, vtt, { label = 'SRT', language = 'und', asDefault = true } = {}) {
+  const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
   const el = document.createElement('track');
   el.kind = 'subtitles';
   el.label = label;

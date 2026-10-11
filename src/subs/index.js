@@ -14,7 +14,7 @@ import { AssOverlay } from './ass.js';
 import { PgsFeed } from './pgs.js';
 import { TextCues } from './text.js';
 
-export { srtToVtt, attachSrt } from './srt.js';
+export { srtToVtt, attachSrt, attachVtt } from './srt.js';
 
 export class Subtitles {
   /**
