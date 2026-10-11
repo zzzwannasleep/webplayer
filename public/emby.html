@@ -1093,9 +1093,19 @@ async function play(item, choice, fromStart){
         // list at all; without this the player could only say so.
         if (subtitleDelivery({ ...chosenSub, IsExternal: true }) === 'text')
           q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
+      } else if (how === 'ext-ass') {
+        // External ass/ssa: served verbatim (Stream.ass), rendered by JASSUB in
+        // the player -- effects kept, not flattened into SRT. subkind tells the
+        // player which renderer to build; subidx lets it dedupe this entry
+        // against the full external list it can fetch from the item itself.
+        q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub, 'ass'));
+        q.set('subkind', 'ass');
+        q.set('subidx', chosenSub.Index);
       } else if (how === 'text') {
         // external or embedded text sub: let Emby serve SRT into a <track>.
         q.set('suburl', EM.subtitleUrl(item.Id, source, chosenSub));
+        q.set('subkind', 'text');
+        q.set('subidx', chosenSub.Index);
       } else {
         q.set('subwarn', chosenSub.DisplayTitle || '图形字幕');   // external bitmap: no path
       }

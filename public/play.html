@@ -228,6 +228,7 @@
 <script type="module">
 import { Player } from '../src/player.js';
 import { Subtitles, attachSrt } from '../src/subs/index.js';
+import { AssOverlay } from '../src/subs/ass.js';
 import { VolumeStage } from '../src/audio/gain.js';
 import { EmbyClient, reline } from '../src/emby/client.js';
 import { Anime4K } from '../src/video/anime4k.js';
@@ -278,6 +279,11 @@ const WANT = {
   // see sources() for the order it is tried in.
   direct: P.get('direct') || '',
   suburl: P.get('suburl'), sublabel: P.get('sublabel') || '字幕',
+  // What kind of external subtitle suburl points at: 'ass' means an original
+  // sidecar script (rendered by JASSUB, effects kept); 'text' means the server
+  // is serving SRT. Derived from the file name for a hand-built URL.
+  subkind: P.get('subkind') || (/\.ass($|\?)/i.test(P.get('suburl') || '') ? 'ass' : 'text'),
+  subidx: P.has('subidx') ? Number(P.get('subidx')) : null,
   subwarn: P.get('subwarn'),
   // What a danmaku lookup needs. emby.html sends them explicitly; when this page
   // is opened by hand they are recovered from the "Name S01E02 · Title" title,
@@ -462,7 +468,15 @@ const label = (x, i) => x.label || `轨道 ${i + 1}`;
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
 let rate = 1;
-let extOn = false;          // the Emby-served <track> is the subtitle showing
+// External (sidecar) subtitles -- declared here because the menu builders below
+// read them before the definitions further down run.
+//   extActive  key of the external entry currently on, or null. One owner for
+//              "is an external subtitle showing" -- the old boolean could not
+//              tell WHICH one, and there is more than one now.
+//   extLabel   what the menu shows for it (a key alone says nothing).
+//   EXT        the item's other external subtitle streams, fetched from Emby
+//              once and cached; null until that request has answered.
+let extTrack = null, extAss = null, extActive = null, extLabel = '', EXT = null;
 // Declared here, built far below with the rest of the sidebar: setRate() runs
 // before that point and `const` in between would be a temporal-dead-zone throw
 // rather than the `undefined` the optional chaining expects.
@@ -629,7 +643,7 @@ $('#dmkBtn').addEventListener('click', () => dmk?.toggle());
 // URL as the fallback for a member with no Emby session of their own — a guest
 // on someone else's film — which is the case that has to work at all.
 const SHARED = ['url', 'title', 'id', 'src', 'size', 'aud', 'audlang',
-                'sub', 'sublang', 'suburl', 'subwarn', 'sublabel', 'series', 'ep', 'direct'];
+                'sub', 'sublang', 'suburl', 'subkind', 'subidx', 'subwarn', 'sublabel', 'series', 'ep', 'direct'];
 const dropKey = u => { try { const x = new URL(u, location.href); x.searchParams.delete('api_key'); return x.toString(); } catch { return u; } };
 const withKey = u => {
   if (!EM?.token) return u;
@@ -727,52 +741,176 @@ function seedChoice() {
   if (WANT.sub != null && info.subtitles.length) {
     CHOICE.sub = pick(info.subtitles, WANT.sub, WANT.sublang);
   } else if (WANT.suburl) {
-    CHOICE.sub = -1;               // client renderer unused; Emby serves it as a <track>
-    attachEmbySub();
+    CHOICE.sub = -1;               // client renderer unused; external sub takes over
+    enableExternal('url');
   } else if (WANT.sub != null) {
     CHOICE.sub = -1;
     player.log('该源未解出字幕轨，客户端字幕不可用（可让 Emby 以 SRT 提供）', 'warn');
   }
 }
 
-// External / text subtitle: Emby serves it as SRT, drawn by the browser's own
-// <track>. The <track> is a DOM child of <video>, so it survives the src swap
-// each play() does; its mode is re-asserted on every metadata load.
-let extTrack = null;
+// One background fetch, once per page: the item's full external-subtitle list.
+// It only ADDS choices to the menu (the query-carried entry works without it),
+// so it must not delay startup -- but when it lands the 字幕 group repaints so
+// the other sidecar files become switchable mid-film.
+(async () => {
+  const list = await externalEntries();
+  if (list.length) paintMenu();
+})();
+
+// ---- external (sidecar) subtitles -----------------------------------------
+// A sidecar file is not inside the container, so the demuxer never sees it.
+// Emby knows it (the item's MediaStreams carry IsExternal entries), and its
+// /Subtitles/{index}/Stream.{format} route serves the bytes. Two renderers:
+//
+//   ass/ssa -> the original script, handed to JASSUB whole -- libass keeps the
+//              effects the SRT round trip used to flatten away. Falls back to
+//              the SRT route below if the server refuses the ass format.
+//   others  -> SRT served by Emby, converted to WebVTT, drawn by the browser's
+//              own <track>.
+//
+// The menu lists ALL external streams of the item (fetched from the item, not
+// just the one emby.html picked), so the viewer can switch mid-film. `key` is
+// "url" for the entry handed over in the query string (it may be a single
+// one-off, and it is the only one a guest without an Emby session ever sees)
+// and "i" + list position for an item-list entry, which cannot collide.
+async function externalEntries() {
+  if (!EM || !WANT.id || !WANT.src) return [];
+  if (!EXT) {
+    try {
+      const it = await EM.item(WANT.id);
+      const src = (it.MediaSources || []).find(s => s.Id === WANT.src)
+        || it.MediaSources?.[0] || {};
+      EXT = (src.MediaStreams || []).filter(s => s.Type === 'Subtitle' && s.IsExternal);
+    } catch (e) { player.log(`外挂字幕列表获取失败: ${e.message}`, 'warn'); EXT = []; }
+  }
+  return EXT.map((s, i) => ({
+    key: `i${i}`,
+    index: s.Index,               // Emby's stream index, for dedup against 'url'
+    label: s.DisplayTitle || s.Title || s.Language || `外挂字幕 ${i + 1}`,
+    language: s.Language || 'und',
+    url: EM.subtitleUrl(WANT.id, { Id: WANT.src }, s, /ass/i.test(s.Codec || '') ? 'ass' : 'srt'),
+    kind: /ass/i.test(s.Codec || '') ? 'ass' : 'text',
+  }));
+}
+
+/** Tear down whichever external renderer is up, and say it is gone. */
+function closeExternal() {
+  if (extAss) { extAss.destroy(); extAss = null; }
+  if (extTrack) { extTrack.remove(); extTrack = null; }
+  extActive = null;
+  extLabel = '';
+}
+
+// The <track> is a DOM child of <video>, so it survives the src swap each
+// play() does; its mode is re-asserted on every metadata load. Registered once
+// here -- every attach used to add its own, and they piled up.
+video.addEventListener('loadedmetadata', () => {
+  if (extTrack && extActive) extTrack.track.mode = 'showing';
+});
+
+/** Activate a concrete external entry (url + kind already resolved). */
+async function activateExternal(entry) {
+  closeExternal();
+  extActive = entry.key;
+  extLabel = entry.label;
+  try {
+    if (entry.kind === 'ass') await attachExternalAss(entry);
+    else await attachExternalText(entry);
+    player.log(`字幕已开启（外挂 ${entry.kind === 'ass' ? 'ASS · 特效' : '文本'}）: ${entry.label}`);
+  } catch (e) {
+    // An external ASS the server will not serve whole: retry once as SRT, which
+    // flattens the effects but shows the lines -- better than a dead picker.
+    if (entry.kind === 'ass' && !entry._retried) {
+      player.log(`外挂 ASS 加载失败（${e.message}），回退为纯文本`, 'warn');
+      return activateExternal({ ...entry, kind: 'text', _retried: true,
+        label: entry.label, url: String(entry.url).replace(/\.ass(?=(\?|$))/i, '.srt') });
+    }
+    player.log(`字幕加载失败: ${e.message}`, 'warn');
+    closeExternal();
+  }
+  paintMenu();
+}
+
+/** Activate one entry by key; null/absent turns the current one off. */
+async function enableExternal(key) {
+  if (key == null || key === '' || key === 'off') { closeExternal(); paintMenu(); return; }
+  if (extActive === key) {
+    if (extTrack) extTrack.track.mode = 'showing';
+    paintMenu(); return;            // a reload (line switch) keeps what is there
+  }
+  const entry = key === 'url'
+    ? { key, url: WANT.suburl, kind: WANT.subkind, label: WANT.sublabel, language: WANT.sublang || 'und' }
+    : (await externalEntries()).find(e => e.key === key);
+  if (!entry || !entry.url) { player.log('所选外挂字幕不存在', 'warn'); paintMenu(); return; }
+  await activateExternal(entry);
+}
+
 /**
- * Emby extracts a subtitle stream with ffmpeg the first time it is asked for
- * one, and answers 404 / 500 / an empty body while that is still running. A
- * single fetch therefore fails on a random subset of plays and succeeds on the
- * retry -- so retry, rather than reporting a transient as a broken subtitle.
- * An empty body counts as a failure: it parses to zero cues either way.
+ * Emby extracts a subtitle with ffmpeg the first time it is asked for one, and
+ * answers 404 / 500 / an empty body while that is still running. A single fetch
+ * therefore fails on a random subset of plays and succeeds on the retry -- so
+ * retry, rather than reporting a transient as a broken subtitle. An empty body
+ * counts as a failure: it parses to zero cues either way.
  */
 async function fetchSubtitle(url, tries = 4) {
   let last;
   for (let i = 0; i < tries; i++) {
     if (i) await new Promise(r => setTimeout(r, 400 * 2 ** (i - 1)));   // 0.4s, 0.8s, 1.6s
     try {
-      const r = await fetch(url);
+      // The token baked into suburl was minted when emby.html navigated here.
+      // If the server has since rotated the session (or the handoff predates a
+      // re-login), the fetch 404s WITH NO CORS HEADER -- the browser reports a
+      // bare "Failed to fetch" and hides the real cause. So from the second
+      // attempt on, rebuild the URL around the LIVE session token; EM.session
+      // itself may have been re-pointed by a line switch along the way.
+      const probe = (i > 0 && EM?.token) ? (() => {
+        try { const u = new URL(url); u.searchParams.set('api_key', EM.token); return u.toString(); }
+        catch { return url; }
+      })() : url;
+      const r = await fetch(probe);
+      // A 404 answered by the REVERSE PROXY (nginx's own HTML page, no CORS
+      // headers, measured on a live server with subtitle extraction disabled)
+      // is definitive: the route does not exist for this stream. Retrying it
+      // four times just delays the same verdict -- fail fast with the real
+      // cause instead of "Failed to fetch" x4.
+      if (r.status === 404) throw Object.assign(new Error('该服务器未开放这条字幕（404）'), { hard404: true });
       if (!r.ok) throw new Error('字幕 ' + r.status);
       const text = await r.text();
       if (!text.trim()) throw new Error('服务器返回了空字幕（仍在提取？）');
+      if (probe !== url) player.log('字幕以当前会话令牌重新获取成功', 'info');
       return text;
-    } catch (e) { last = e; player.log(`字幕读取第 ${i + 1} 次失败：${e.message}`, 'warn'); }
+    } catch (e) {
+      last = e;
+      if (e.hard404) { player.log(e.message, 'warn'); throw e; }
+      player.log(`字幕读取第 ${i + 1} 次失败：${e.message}`, 'warn');
+    }
   }
   throw last;
 }
-async function attachEmbySub() {
-  // a reload (line switch) keeps the <track> that is already there
-  if (extTrack) { showExtSub(true); return; }
-  try {
-    const srt = await fetchSubtitle(WANT.suburl);
-    extTrack = attachSrt(video, srt, { label: WANT.sublabel, language: WANT.sublang || 'und', asDefault: true });
-    extOn = true;
-    // Re-asserted on every load, but only to whatever the viewer last chose --
-    // forcing 'showing' here put the track back after they turned it off.
-    video.addEventListener('loadedmetadata', () => { if (extTrack) extTrack.track.mode = extOn ? 'showing' : 'disabled'; });
-    player.log(`字幕已开启（Emby 提供）: ${WANT.sublabel}`);
-    paintMenu();
-  } catch (e) { player.log(`字幕加载失败: ${e.message}`, 'warn'); }
+
+/** External ASS/SSA: the whole script goes to JASSUB, effects and all. */
+async function attachExternalAss(entry, alreadyFetched) {
+  const script = alreadyFetched ?? await fetchSubtitle(entry.url);
+  if (!/^\s*\[Script Info\]/m.test(script))
+    throw new Error('服务器没有返回 ASS 脚本');
+  extAss = new AssOverlay(video, new TextEncoder().encode(script), [],
+    { vendor: subs.vendor, log: (m, l) => player.log(m, l), queryFonts: 'local' });
+  await extAss.ready;
+}
+
+/** External text subtitle: Emby-served SRT -> VTT -> the browser's <track>. */
+async function attachExternalText(entry) {
+  const srt = await fetchSubtitle(entry.url);
+  // Some Emby builds answer Stream.srt for an external .ass with the ORIGINAL
+  // script (measured: 200, text/x-ssa, same bytes as Stream.ass) instead of a
+  // conversion. Render what was actually served: an ASS-looking body goes to
+  // libass, not into srtToVtt -- which would correctly refuse it ("no cues").
+  if (/^\s*\[Script Info\]/m.test(srt)) {
+    entry.kind = 'ass';
+    return attachExternalAss(entry, srt);
+  }
+  extTrack = attachSrt(video, srt, { label: entry.label, language: entry.language, asDefault: true });
 }
 
 function gainNote() {
@@ -790,46 +928,70 @@ setInterval(() => { if (menu.open === 'gain') paintMenu(); }, 1000);
 // deep behind a group named after something else -- and an Emby-served .srt is
 // a <track> element, not a demuxed track, so it never appeared in that list at
 // all. It could not be switched away from or turned off from inside the player.
+//
+// Every EXTERNAL stream the item carries is listed here too (not just the one
+// the detail page happened to hand over), keyed so it cannot collide with the
+// demuxed indices: 'url' for the query-carried entry, 'i0','i1',... for the
+// rest. The two sides are mutually exclusive -- picking one tears the other
+// down -- because two subtitle sources drawing at once is never what anybody
+// means.
+function extRows() {
+  const rows = [];
+  // subidx present = an EXTERNAL stream (sidecar file) -- always listed.
+  // Absent = the fallback server copy of an EMBEDDED text stream, which only
+  // earns a row when there is no demuxed list to offer the same lines (native
+  // playback): on a live server with subtitle extraction disabled that route
+  // answers a bare nginx 404, and a row that can only fail is noise.
+  if (WANT.suburl && (WANT.subidx != null || info?.native))
+    rows.push({ value: 'url',
+      label: `${WANT.sublabel} · 外挂${WANT.subkind === 'ass' ? ' ASS 特效' : ''}` });
+  for (const e of EXT || []) {
+    if (e.key === 'url' || (WANT.suburl && e.index === WANT.subidx)) continue;
+    rows.push({ value: e.key, label: `${e.label} · 外挂${e.kind === 'ass' ? ' ASS 特效' : ''}` });
+  }
+  return rows;
+}
+
 function subtitleGroup() {
   if (!info && !WANT.suburl) return null;
   const list = info?.native ? [] : (info?.subtitles || []);
-  const opts = [{ value: -1, label: '关闭' }];
-  if (WANT.suburl) opts.push({ value: 'ext', label: `${WANT.sublabel} · Emby 提供` });
+  const opts = [{ value: 'off', label: '关闭' }, ...extRows()];
   for (const [i, x] of list.entries()) {
     const ok = Subtitles.SUPPORTED.has(x.format);
     opts.push({ value: i, label: label(x, i) + (ok ? '' : ' ✕ 无渲染器'), disabled: !ok });
   }
   const has = opts.length > 1;
-  const now = extOn ? WANT.sublabel
+  const now = extActive
+    ? extLabel || '外挂字幕'
     : list[CHOICE.sub] ? label(list[CHOICE.sub], CHOICE.sub) : '关闭';
   return {
     key: 'sub', label: '字幕', value: has ? now : '无',
     rows: [has
-      ? { type: 'select', id: 'sub', label: '字幕轨', value: extOn ? 'ext' : CHOICE.sub,
+      ? { type: 'select', id: 'sub', label: '字幕轨', value: extActive ?? 'off',
           options: opts, onChange: selectSub }
       // Say why it is empty. An absent picker and a picker with nothing in it
       // look the same from the outside, and only one of them is a bug.
       : { type: 'note', text: info?.native
-          ? '原生播放通路解不出内嵌字幕轨。可以在 Emby 里选一条字幕，由服务器以 SRT 送过来。'
+          ? '原生播放通路解不出内嵌字幕轨。可以在 Emby 里选一条字幕，由服务器送过来。'
           : '这个片源没有解出字幕轨。' }],
   };
 }
 
 async function selectSub(v) {
-  showExtSub(v === 'ext');
-  await applySubtitle(v === 'ext' ? -1 : Number(v));
-}
-
-/** The Emby <track> lives outside the demuxed list; one owner for its mode. */
-function showExtSub(on) {
-  extOn = on && !!WANT.suburl;
-  // Fetched on demand, not at startup. An embedded text sub now arrives with a
-  // demuxed track AND a server URL, and the demuxed one is preferred -- so the
-  // first time anybody picks the server copy from the menu is the first time it
-  // is worth asking Emby to extract it. Without this the option was in the list
-  // and did nothing.
-  if (extOn && !extTrack) { attachEmbySub(); return; }
-  if (extTrack) extTrack.track.mode = extOn ? 'showing' : 'disabled';
+  if (v === 'off') {
+    CHOICE.sub = -1;
+    closeExternal();
+    await applySubtitle(-1);
+    return;
+  }
+  if (v === 'url' || /^i\d+$/.test(v)) {
+    CHOICE.sub = -1;
+    await subs.select(-1);          // the demuxed track steps aside first
+    await enableExternal(v);
+    return;
+  }
+  closeExternal();                  // demuxed picked: the external one steps aside
+  await applySubtitle(Number(v));
 }
 
 async function applySubtitle(idx) {

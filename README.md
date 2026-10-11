@@ -197,7 +197,9 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
 - 配额感知的缓冲,自动驱逐已播放过的媒体
 - 轨道压缩(`ContentEncodings`):zlib 与 header stripping
 - 字幕:带内嵌字体的特效 ASS、PGS、内嵌文本轨(MKV 的 SRT / mp4 的 tx3g·wvtt)、
-  以及外挂 SRT
+  外挂 SRT,以及 Emby 的外挂 ASS(原始脚本送进 libass,特效保留;脚本自带
+  `[Fonts]` 子集字体的直接可用,引用系统字体的需要浏览器已授权"本地字体"——
+  未授权则回退默认字形,取不到 ASS 时自动降级为服务器转制的 SRT)
 - 弹幕:B 站 XML 与弹弹play JSON 两种格式,canvas 渲染,按条目记住(设置进
   localStorage、弹幕本体进 IndexedDB;见下面折叠的**弹幕**一节)
 - **一起看**:房间同步播放进度、文字聊天、浏览器之间直连的实时语音。中转自己部署,
@@ -205,8 +207,11 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
   **[DEPLOY-TOGETHER.md](DEPLOY-TOGETHER.md)**,原理见下面折叠的**一起看**一节
 - 手机端:完整手势、底部标签栏、安全区适配(见上面的**手机端**)
 - Emby 接入 —— 浏览服务器、直连播放(零转码)原盘字节、双向续看、把详情页里
-  选好的音轨/字幕逐轨预选并带进专用播放器。见 `public/emby.html` +
-  `src/emby/client.js`,部署说明见 **[DEPLOY.md](DEPLOY.md)**
+  选好的音轨/字幕逐轨预选并带进专用播放器。外挂字幕(sidecar .ass/.srt)由
+  服务器取原始文件:ASS 整脚本交给 libass 渲染(特效保留,`[Fonts]` 内嵌子集
+  字体直接生效),其余转 SRT 走 `<track>`;播放中可在字幕菜单里换选任意一条
+  外挂字幕。见 `public/emby.html` + `src/emby/client.js`,部署说明见
+  **[DEPLOY.md](DEPLOY.md)**
 - `.strm` 远程源(自建 S3/MinIO、alist/OpenList、302 跳板)—— 容器一个都认不出、
   服务器不肯说文件多长、不支持 Range、或干脆没有 CORS 头,这些情况都改由浏览器
   原生解码接管而不是报错。见下面折叠的 **.strm 与原生兜底**
@@ -217,8 +222,7 @@ Access-Control-Expose-Headers: Accept-Ranges, Content-Length, Content-Range
 
 尚未实现:
 
-- 外挂 ASS 脚本。内嵌的能用;外挂的得在系统里找到它的字体,那是另一个问题
-- VobSub 和 DVB 字幕。能识别、能上报,但不绘制
+- VobSub 和 DVB 字幕。能识别、能上报,但不绘制(外挂也一样)
 
 ---
 

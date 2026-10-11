@@ -67,8 +67,15 @@ createServer((req, res) => {
   // the one condition public/strmcheck.html cannot otherwise create and the one
   // the native <video> fallback exists for. Dev server only.
   const noCors = url.startsWith('/nocors/');
+  // TEST AFFORDANCE: an Emby-shaped stream URL (/Videos/<id>/stream[.ext])
+  // serves the small sample video. The stubbed-Emby UI test hands play.html a
+  // stream URL whose host must RESOLVE, because the bytes are fetched by the
+  // demux WORKER -- and a page-level fetch stub cannot reach into a worker.
+  // Same shape, Range included, real container bytes out.
+  const emulatedStream = /^\/Videos\/[^/]+\/stream(\.[a-z0-9]+)?$/.test(url);
 
-  let path = join(ROOT, normalize(noCors ? url.slice('/nocors'.length) : url));
+  let path = join(ROOT, normalize(noCors || emulatedStream ? '/samples/ext-sub-test.mp4' : url));
+  if (noCors) path = join(ROOT, normalize(url.slice('/nocors'.length)));   // nocors keeps the real path
   if (!path.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
 
   let st;

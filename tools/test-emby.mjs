@@ -9,8 +9,15 @@ import { EmbyClient, subtitleDelivery, reline, servers, serverIcons, isRemoteSou
 assert.equal(subtitleDelivery({ Codec: 'ass' }), 'client', 'embedded ASS renders in-browser');
 assert.equal(subtitleDelivery({ Codec: 'ssa' }), 'client', 'embedded SSA renders in-browser');
 assert.equal(subtitleDelivery({ Codec: 'PGSSUB' }), 'client', 'embedded PGS renders in-browser');
-assert.equal(subtitleDelivery({ Codec: 'ass', IsExternal: true }), 'text',
-  'external ASS has no in-browser path (fonts) — served as SRT text');
+// External ASS now goes to the in-browser libass path: the player fetches the
+// ORIGINAL script (Stream.ass) and hands it to JASSUB whole, so the effects the
+// SRT round trip used to flatten away are kept. (Server-side it is a first-
+// class file: emby.media/support/articles/Subtitles.html lists ass/ssa as
+// supported external formats.)
+assert.equal(subtitleDelivery({ Codec: 'ass', IsExternal: true }), 'ext-ass',
+  'external ASS renders in-browser from the original script');
+assert.equal(subtitleDelivery({ Codec: 'SSA', IsExternal: true }), 'ext-ass',
+  'external SSA renders in-browser from the original script');
 // Embedded text used to be routed to Emby because there was no client renderer.
 // src/subs/text.js is one, and the server round trip was the flaky half: Emby
 // extracts on demand and answers 404/500/empty while ffmpeg runs.
@@ -36,6 +43,10 @@ assert.equal(u.searchParams.get('api_key'), 'TKN', 'token carried for a plain GE
 const v = new URL(c.subtitleUrl('item42', null, { Index: 0 }, 'vtt'));
 assert.ok(v.pathname.endsWith('/Subtitles/0/Stream.vtt'), 'format override honoured');
 assert.ok(v.pathname.includes('/Videos/item42/item42/'), 'falls back to itemId when source has no Id');
+
+// The external-ASS path asks for the ORIGINAL script, not a conversion.
+const a = new URL(c.subtitleUrl('item42', { Id: 'srcA' }, { Index: 5 }, 'ass'));
+assert.ok(a.pathname.endsWith('/Subtitles/5/Stream.ass'), 'external ASS is fetched verbatim (Stream.ass)');
 
 // --- imageUrl: id and tag must be paired (the episode-cover-blank bug) -------
 const idAndTag = url => { const u = new URL(url); return { id: u.pathname.split('/Items/')[1].split('/Images/')[0], tag: u.searchParams.get('tag') }; };

@@ -97,6 +97,13 @@ const DIRECT_PROFILE = {
   SubtitleProfiles: [
     { Format: 'ass', Method: 'Embed' }, { Format: 'ssa', Method: 'Embed' },
     { Format: 'pgssub', Method: 'Embed' }, { Format: 'srt', Method: 'Embed' },
+    // Sidecar (external) subtitle files: this client fetches them itself and
+    // renders in-browser (ass/ssa via JASSUB, the rest via the server's SRT
+    // extraction), so the server must know file delivery is acceptable -- with
+    // only Embed declared, an external stream matches no profile at all.
+    { Format: 'ass', Method: 'External' }, { Format: 'ssa', Method: 'External' },
+    { Format: 'srt', Method: 'External' }, { Format: 'subrip', Method: 'External' },
+    { Format: 'vtt', Method: 'External' },
   ],
 };
 
@@ -520,9 +527,14 @@ export class EmbyClient {
 //                    JASSUB, pgs via libpgs, srt/subrip via the browser's own
 //                    TextTrack). Keeps effects + embedded fonts, no server work.
 //                    Only for EMBEDDED streams.
+//   'ext-ass'     -> an EXTERNAL (sidecar) ass/ssa: Emby serves the original
+//                    script via /Subtitles/{index}/Stream.ass and JASSUB takes a
+//                    whole script as its content, so effects survive. play.html
+//                    falls back to the 'text' path if the server refuses ass.
 //   'text'        -> have Emby serve it as SRT into the browser's <track>. For
-//                    EXTERNAL (sidecar) text subs, which are not in the
-//                    container and so cannot be demuxed.
+//                    EXTERNAL (sidecar) text subs in other spellings, and as
+//                    the fallback for 'ext-ass'. These are not in the container
+//                    and so cannot be demuxed.
 //   'unsupported' -> an external bitmap sub (external pgs/vobsub); no clean path.
 //
 // Embedded SRT used to be routed to 'text' as well, back when there was no
@@ -534,11 +546,16 @@ export class EmbyClient {
 // Matched whole, not by substring: "dvb_teletext" contains "text" but has no
 // local renderer, and routing it here would have shown nothing at all.
 const CLIENT_TEXT = new Set(['ass', 'ssa', 'srt', 'subrip', 'mov_text', 'tx3g', 'webvtt', 'vtt']);
+// An EXTERNAL (sidecar) ass/ssa file now renders in-browser too: Emby serves the
+// original script via /Subtitles/{index}/Stream.ass and JASSUB takes a whole
+// script as its content -- so the effects survive instead of being flattened
+// into SRT. Text in any other spelling keeps the SRT round trip.
+const EXTERNAL_LIBASS = new Set(['ass', 'ssa']);
 export function subtitleDelivery(stream) {
   const codec = (stream?.Codec || '').toLowerCase();
   const bitmap = /pgs|vobsub|dvbsub|dvb_subtitle|dvd_subtitle/.test(codec);
   if (!stream?.IsExternal && (bitmap || CLIENT_TEXT.has(codec))) return 'client';
-  if (!bitmap) return 'text';
+  if (!bitmap) return stream?.IsExternal && EXTERNAL_LIBASS.has(codec) ? 'ext-ass' : 'text';
   return 'unsupported';
 }
 

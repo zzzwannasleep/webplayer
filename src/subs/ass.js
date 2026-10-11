@@ -58,12 +58,23 @@ export function parseAssPacket(text) {
 export class AssOverlay {
   /**
    * @param video    the <video> to render over
-   * @param header   CodecPrivate of the ASS track (a whole ASS script minus events)
+   * @param header   CodecPrivate of the ASS track (a whole ASS script minus events),
+   *                 or a COMPLETE script for an external sidecar file ([Events]
+   *                 included -- libass parses the embedded timings itself)
    * @param fonts    embedded font files as Uint8Array, from player.fontAttachments()
    * @param vendor   URL prefix where the bundled JASSUB files live
+   * @param queryFonts JASSUB's local-font lookup. OFF by default and must stay
+   *                 off for EMBEDDED tracks: their styles reference random
+   *                 subset font names, and a system font must never be allowed
+   *                 to shadow the font shipped inside the file. An EXTERNAL
+   *                 sidecar script is the opposite case -- it names real system
+   *                 fonts ("Microsoft YaHei") and has no embedded fonts at all,
+   *                 so pass 'local' there. JASSUB only answers it when the
+   *                 browser's local-fonts permission is already granted; it
+   *                 never prompts, and a denial degrades to the default font.
    */
   constructor(video, header, fonts = [],
-              { vendor, log = () => {}, maxRenderHeight = ASS_MAX_RENDER_HEIGHT } = {}) {
+              { vendor, log = () => {}, maxRenderHeight = ASS_MAX_RENDER_HEIGHT, queryFonts = false } = {}) {
     vendor = new URL(vendor ?? 'vendor/', document.baseURI).href.replace(/\/$/, '');
     this.log = log;
     this.video = video;
@@ -88,9 +99,7 @@ export class AssOverlay {
         fonts,
         availableFonts: { 'liberation sans': `${vendor}/default.woff2` },
         defaultFont: 'liberation sans',
-        // Asking the OS for fonts needs a permission prompt and would make a
-        // missing embedded font look like it worked on this machine only.
-        queryFonts: false,
+        queryFonts,
         // Cap the subtitle raster. JASSUB defaults maxRenderHeight to 0 --
         // no limit -- so it rasterises at the displayed height times the
         // device pixel ratio: 2160 lines on a 4K screen, 4320 on a HiDPI

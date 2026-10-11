@@ -34,6 +34,11 @@ process.on('exit', bye);
 kids.push(spawn(process.execPath, [join(ROOT, 'tools/serve.mjs'), ROOT],
   { stdio: 'ignore', env: { ...process.env, PORT: String(PORT) } }));
 kids.push(spawn(EDGE, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`,
+  // A machine-level proxy answers even localhost through a dead route -- the
+  // worker/video fetches the stub cannot intercept then die with
+  // "Failed to fetch". The stubbed UI itself never notices; the player page
+  // (real bytes, real wasm worker) does. Bypass the proxy outright.
+  '--no-proxy-server',
   '--no-first-run', '--no-default-browser-check', '--disable-sync', 'about:blank'], { stdio: 'ignore' }));
 
 let targets = null;
@@ -67,10 +72,10 @@ const evalJS = async expression => {
 // A whole fake Emby, installed before any page script runs.
 const STUB = `
 localStorage.setItem('linweb:emby', JSON.stringify({
-  home:'http://emby.test', server:'http://emby.test', token:'T', userId:'U1',
+  home:'http://localhost:${PORT}', server:'http://localhost:${PORT}', token:'T', userId:'U1',
   userName:'tester', policy:{ IsAdministrator:false } }));
 localStorage.setItem('linweb:servers', JSON.stringify([
-  { url:'http://emby.test', line:'http://emby.test', token:'T', userId:'U1', userName:'tester' },
+  { url:'http://localhost:${PORT}', line:'http://localhost:${PORT}', token:'T', userId:'U1', userName:'tester' },
   { url:'http://other.test', token:null, userName:'someone' } ]));
 window.__calls = [];
 const item = (Id, Name, extra) => Object.assign({ Id, Name, Type:'Movie', RunTimeTicks:36000000000,
@@ -78,10 +83,22 @@ const item = (Id, Name, extra) => Object.assign({ Id, Name, Type:'Movie', RunTim
   MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
     { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
     { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' }] }] }, extra);
+// R1 carries an EXTERNAL (sidecar) ass subtitle: the regression target of the
+// play-handoff assertions below.
+const extSubItem = extra => item('R1', '继续看的片', Object.assign({
+  MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
+    { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
+    { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
+    { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS' }] }] }, extra));
 window.__fail401 = null;      // set by the test to expire the session mid-browse
-window.fetch = async (u) => {
+const __realFetch = window.fetch.bind(window);
+window.fetch = async (u, opt) => {
   const url = String(u); window.__calls.push(url);
   const p = new URL(url); const q = p.searchParams; let body = {};
+  // The video stream itself: hand the player REAL playable bytes (a small MP4
+  // served by the dev server) instead of JSON, so loadAny succeeds, render()
+  // runs, and the external-subtitle seeding below actually executes.
+  if (/\\/Videos\\/[^/]+\\/stream/.test(p.pathname)) return __realFetch('/samples/ext-sub-test.mp4', opt);
   if (window.__fail401 && p.pathname.includes(window.__fail401))
     return { ok:false, status:401, url, json: async () => ({}), text: async () => '' };
   // Eight libraries on purpose, two of them collection types the home page used
@@ -100,12 +117,22 @@ window.fetch = async (u) => {
   else if (/\\/Episodes$/.test(p.pathname)) body = { Items:[ item('EP1','第 1 集', { Type:'Episode', IndexNumber:1 }) ] };
   else if (/\\/Items\\/[^/]+$/.test(p.pathname)) {
     const id = p.pathname.split('/').pop();
-    body = item(id, '详情条目', id.startsWith('SER') ? { Type:'Series' } : {});
+    body = id === 'R1' ? extSubItem() : item(id, '详情条目', id.startsWith('SER') ? { Type:'Series' } : {});
   }
-  else if (p.pathname.endsWith('/Items')) body = { Items:[ item('R1','继续看的片'), item('R2','另一部') ], TotalRecordCount:2 };
+  else if (p.pathname.includes('/PlaybackInfo')) body = {
+    PlaySessionId:'ps1',
+    MediaSources:[{ Id:'s1', Container:'mkv', Size:1000, MediaStreams:[
+      { Type:'Video', Codec:'hevc', Width:3840, Height:2160 },
+      { Type:'Audio', Codec:'eac3', DisplayTitle:'EAC3 5.1' },
+      { Type:'Subtitle', Codec:'ass', IsExternal:true, Index:2, DisplayTitle:'中文 ASS' }] }] };
+  else if (p.pathname.endsWith('/Items')) body = { Items:[ extSubItem(), item('R2','另一部') ], TotalRecordCount:2 };
   else if (p.pathname.includes('/Genres')) body = { Items:[] };
   else body = { Items:[] };
-  return { ok:true, status:200, url, json: async () => body, text: async () => '' };
+  // The subtitle extraction route: a minimal but structurally complete ASS the
+  // in-player JASSUB path can parse (the script-info guard checks for it).
+  const subText = '[Script Info]\\nTitle: t\\n\\n[V4+ Styles]\\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\\nStyle: Main,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,30,1\\n\\n[Events]\\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\\nDialogue: 0,0:00:01.00,0:00:05.00,Main,,0,0,0,,测试字幕一行\\n';
+  return { ok:true, status:200, url, json: async () => body,
+           text: async () => p.pathname.includes('/Subtitles/') ? subText : '' };
 };`;
 
 await send('Page.enable'); await send('Runtime.enable');
@@ -233,6 +260,57 @@ check('a stray closeCtx() with no menu open does not pop history',
   await evalJS(`location.href === window.__before`));
 
 check('still no uncaught exceptions after driving the UI', errors.length === 0, errors.join(' | '));
+
+// --- the external (sidecar) subtitle handoff, end to end -------------------
+// R1 carries an external ASS stream. Open its preplay, pick the sub, hit play,
+// and the handoff must land on play.html with the ORIGINAL-script URL
+// (Stream.ass + subkind=ass) -- then JASSUB must actually draw it. This is the
+// feature that used to be flattened into SRT, asserted at the pixel layer.
+await evalJS(`document.querySelector('.navbtn[data-view="home"]').click()`);
+await sleep(800);
+check('home shows a resume card to click',
+  await evalJS(`!!document.querySelector('[data-resume]')`),
+  await evalJS(`document.querySelector('#rails')?.innerHTML.slice(0, 300) || 'NO RAILS'`));
+await evalJS(`document.querySelector('[data-resume]')?.click()`);
+await sleep(600);
+check('preplay opens for a resume item',
+  await evalJS(`document.querySelector('#preplay').classList.contains('open')`));
+const subOpts = await evalJS(`[...document.querySelectorAll('#ppChooser .chz')].find(z => z.dataset.k==='sub')?.querySelectorAll('.chopt').length`);
+check('the preplay chooser lists the external sub', subOpts === 2, `${subOpts} option(s)`);
+await evalJS(`[...document.querySelectorAll('#ppChooser .chz')].find(z => z.dataset.k==='sub').querySelectorAll('.chopt')[1].click()`);
+await sleep(200);
+await evalJS(`document.querySelector('#ppGo').click()`);
+// play() resolves PlaybackInfo then navigates to play.html.
+let onPlayer = null;
+for (let i = 0; i < 30 && !onPlayer; i++) {
+  await sleep(400);
+  onPlayer = await evalJS(`location.pathname.endsWith('/play.html') && !!document.querySelector('#video')`).catch(() => false);
+}
+check('play handed off to play.html', !!onPlayer);
+const handoff = await evalJS(`Object.fromEntries([...new URLSearchParams(location.search)].slice(0, 40))`);
+check('external ASS travels as the ORIGINAL script (Stream.ass + subkind=ass)',
+  /Stream\.ass/.test(handoff.suburl || '') && handoff.subkind === 'ass',
+  JSON.stringify({ suburl: handoff.suburl, subkind: handoff.subkind, subidx: handoff.subidx }));
+// The <video> has no real bytes behind it in the stub, so drive the picker the
+// way a viewer would and assert on the DOM + log instead of pixels.
+let subOn = null;
+for (let i = 0; i < 25 && !subOn; i++) {
+  await sleep(400);
+  subOn = await evalJS(`[...document.querySelectorAll('#log div')].some(d => /字幕已开启（外挂 ASS · 特效）/.test(d.textContent))`).catch(() => false);
+}
+check('the player logs the external ASS as ACTIVE (effects renderer)',
+  !!subOn, (await evalJS(`(() => { const v = document.querySelector('#video');
+    return [...document.querySelectorAll('#log div')].map(d => d.textContent).join(' | ')
+      + ' || PH: ' + document.querySelector('#phText')?.textContent
+      + ' || video: rs=' + v?.readyState + ' src=' + (v?.currentSrc || '').slice(0, 60)
+      + ' || calls: ' + (window.__calls || []).slice(-4).join(' ; '); })()`).catch(e => 'EVAL ERR ' + e.message)));
+check('no uncaught exception on the player page', errors.length === 0, errors.join(' | '));
+
+// Hand the page back to the session-expiry test below, which assumes it is
+// standing on emby.html with a fresh document (the stub re-runs, so __calls,
+// the session and history all start over -- exactly what that test expects).
+await send('Page.navigate', { url: `http://localhost:${PORT}/public/emby.html` });
+await sleep(900);
 
 // --- a session that expires UNDER an open overlay ---
 // Runs last: it logs the session out. The overlay outliving its session is the
