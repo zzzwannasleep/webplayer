@@ -422,13 +422,26 @@ export class EmbyClient {
     return `${this.server}/Videos/${itemId}/stream${containerExt(source)}?${p}`;
   }
 
-  // Ask the server to extract/convert a subtitle stream to SRT so the browser's
-  // own <track> can draw it. Used for the two cases the in-browser renderers do
-  // NOT cover: an external (sidecar) subtitle, and an EMBEDDED text subtitle
-  // (S_TEXT/UTF8 etc.) — Subtitles only renders ass/ssa/pgs, so text subs would
-  // otherwise silently show nothing. ASS/PGS are still demuxed and drawn client-
-  // side (effects, embedded fonts, HDR-safe), never routed here.
+  // Ask the server to extract/convert a subtitle stream. Used for the two cases
+  // the in-browser renderers do NOT cover: an external (sidecar) subtitle, and
+  // an EMBEDDED text subtitle (S_TEXT/UTF8 etc.) — Subtitles only renders
+  // ass/ssa/pgs, so text subs would otherwise silently show nothing.
+  //
+  // An EXTERNAL stream on a well-behaved server carries DeliveryUrl +
+  // DeliveryMethod: "External" in its PlaybackInfo MediaStreams — that is the
+  // server's own, authoritative address for the sidecar file, and on Emby-like
+  // reimplementations it is the ONLY address that works (measured on a live
+  // Gin-based server where the generic /Subtitles route keys by an internal
+  // file id and 404s for anything else). Prefer it whenever present; keep the
+  // format argument out of its way — DeliveryUrl serves the original file.
   subtitleUrl(itemId, source, stream, format = 'srt') {
+    if (stream?.DeliveryUrl) {
+      let u;
+      try { u = new URL(stream.DeliveryUrl, this.server); }
+      catch { return stream.DeliveryUrl; }
+      if (this.token) u.searchParams.set('api_key', this.token);
+      return u.toString();
+    }
     const p = new URLSearchParams();
     if (this.token) p.set('api_key', this.token);
     return `${this.server}/Videos/${itemId}/${source?.Id || itemId}/Subtitles/${stream.Index}/Stream.${format}?${p}`;

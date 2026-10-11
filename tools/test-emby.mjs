@@ -40,6 +40,18 @@ const u = new URL(c.subtitleUrl('item42', { Id: 'srcA' }, { Index: 3 }));
 assert.equal(u.origin + u.pathname, 'https://emby.example/Videos/item42/srcA/Subtitles/3/Stream.srt');
 assert.equal(u.searchParams.get('api_key'), 'TKN', 'token carried for a plain GET');
 
+// A server-declared DeliveryUrl (DeliveryMethod: External) is authoritative:
+// Emby-like reimplementations key their generic /Subtitles route by an internal
+// file id, and the only working address is the one the server itself hands out.
+const dv = new URL(c.subtitleUrl('item42', { Id: 'srcA' },
+  { Index: 1, DeliveryUrl: '/play/subtitle/01ASSET?api_key=OLD', DeliveryMethod: 'External' }, 'ass'));
+assert.equal(dv.origin + dv.pathname, 'https://emby.example/play/subtitle/01ASSET',
+  'DeliveryUrl wins over the generic extraction route');
+assert.equal(dv.searchParams.get('api_key'), 'TKN', 'DeliveryUrl is re-keyed to the live session token');
+// A relative DeliveryUrl resolves against the server origin, not the page.
+const rel = new URL(c.subtitleUrl('i', { Id: 's' }, { Index: 0, DeliveryUrl: '/play/subtitle/x' }));
+assert.equal(rel.origin + rel.pathname, 'https://emby.example/play/subtitle/x', 'relative DeliveryUrl resolved against the server');
+
 const v = new URL(c.subtitleUrl('item42', null, { Index: 0 }, 'vtt'));
 assert.ok(v.pathname.endsWith('/Subtitles/0/Stream.vtt'), 'format override honoured');
 assert.ok(v.pathname.includes('/Videos/item42/item42/'), 'falls back to itemId when source has no Id');
